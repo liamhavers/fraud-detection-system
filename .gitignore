@@ -12,9 +12,11 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Data (never commit raw/processed data)
-data/raw/*
+data/raw/creditcard/*
+data/raw/ieee_cis/*
 data/processed/*
-!data/raw/.gitkeep
+!data/raw/creditcard/.gitkeep
+!data/raw/ieee_cis/.gitkeep
 !data/processed/.gitkeep
 
 # Model artifacts
