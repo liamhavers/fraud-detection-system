@@ -32,6 +32,23 @@ CATEGORICAL_COLUMNS = [
     "M7",
     "M8",
     "M9",
+    "id_12",
+    "id_15",
+    "id_16",
+    "id_23",
+    "id_27",
+    "id_28",
+    "id_29",
+    "id_30",
+    "id_31",
+    "id_33",
+    "id_34",
+    "id_35",
+    "id_36",
+    "id_37",
+    "id_38",
+    "DeviceType",
+    "DeviceInfo",
 ]
 UNSEEN_CATEGORY_CODE = -1
 N_MISSING_INDICATOR_COLUMNS = 8
@@ -71,9 +88,10 @@ def fit_feature_encoders(train_df: pd.DataFrame) -> dict:
     for both the train and test splits, so test never influences what the
     encoders learned.
     """
+    categorical_columns_present = [col for col in CATEGORICAL_COLUMNS if col in train_df.columns]
     category_maps = {
         col: {cat: code for code, cat in enumerate(train_df[col].astype("category").cat.categories)}
-        for col in CATEGORICAL_COLUMNS
+        for col in categorical_columns_present
     }
 
     card1_frequency = train_df["card1"].value_counts()

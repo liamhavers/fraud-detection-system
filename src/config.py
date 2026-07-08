@@ -15,6 +15,10 @@ RAW_DATA_FILE = CREDITCARD_RAW_DIR / "creditcard.csv"
 TRAIN_DATA_FILE = DATA_PROCESSED_DIR / "train.csv"
 TEST_DATA_FILE = DATA_PROCESSED_DIR / "test.csv"
 MODEL_ARTIFACT_FILE = MODELS_DIR / "model.pkl"
+# Both imbalance-handling variants are kept around (not just the winner) so
+# the Phase 3 shadow-mode A/B test has two real trained policies to compare.
+MODEL_ARTIFACT_CLASS_WEIGHTED_FILE = MODELS_DIR / "model_class_weighted.pkl"
+MODEL_ARTIFACT_SMOTE_FILE = MODELS_DIR / "model_smote.pkl"
 
 # IEEE-CIS dataset — feature-engineering showcase, not served via the API.
 IEEE_RAW_DIR = DATA_RAW_DIR / "ieee_cis"

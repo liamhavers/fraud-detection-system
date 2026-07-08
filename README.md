@@ -112,9 +112,10 @@ fraud-detection-system/
 - [x] Data loading, cleaning, time-aware train/test split (both datasets)
 - [x] IEEE-CIS feature engineering (`preprocess_ieee.py`) — join, categorical encoding, card-level aggregations (`card1_frequency`, `card1_mean_amount`, `time_since_last_txn_same_card`). Encoders and stats are fit on the training split only and applied to test — fitting on the whole joined dataset before splitting would leak exactly the kind of cross-split information the Kaggle notebook's finding was a reminder to watch for.
 
-### Phase 2 — Modelling
-- [ ] Baseline logistic regression + XGBoost training on Kaggle, SMOTE vs. class-weighting comparison
-- [ ] IEEE-CIS XGBoost training on the engineered feature set
+### Phase 2 — Modelling (complete)
+- [x] Baseline logistic regression + XGBoost training on Kaggle, SMOTE vs. class-weighting comparison — PR-AUC on the held-out (time-ordered) test set: baseline logistic regression 0.761, XGBoost + SMOTE 0.789, XGBoost + class-weighting 0.798. Class-weighting edges out SMOTE here, but both XGBoost variants are kept as saved artifacts (`model_class_weighted.pkl`, `model_smote.pkl`) rather than discarding the "loser" — that comparison is decided statistically, not by eyeballing, in the Phase 3 shadow-mode A/B test.
+- [x] IEEE-CIS XGBoost training on the engineered feature set — PR-AUC 0.497 against a 3.5% base fraud rate. While building this, found and fixed a real gap in `preprocess_ieee.py`: 17 identity/device columns (`id_12`–`id_38`, `DeviceType`, `DeviceInfo`) were never added to the categorical-encoding list from Phase 1, so they were still raw strings and would have failed at `fit()`. Fixed by extending the same fit-on-train-only label-encoding path already used for `ProductCD`/`card4`/etc., guarded to only touch columns actually present (so the synthetic-data unit tests still pass without needing every identity column).
+- [x] Simple experiment tracking — each training run logs hyperparameters + PR-AUC per model to a timestamped JSON file under `experiments/`
 
 ### Phase 3 — Evaluation & Shadow-Mode A/B Testing
 - [ ] PR-AUC, precision-recall curve, confusion matrix at candidate thresholds, cost-sensitive threshold selection (both datasets) — results to report here: PR-AUC, chosen decision threshold, expected cost reduction vs. a naive baseline, precision/recall at the chosen threshold (Kaggle); PR-AUC and key engineered features and why they helped (IEEE-CIS)
@@ -239,4 +240,4 @@ docker run -p 8000:8000 fraud-detection
 
 ## Status
 
-🚧 In progress — Phase 0 (scaffolding) and Phase 1 (data & EDA) are complete for both datasets; Phase 2 (modelling) is next. Trained models, evaluation results, and the A/B test writeup will land as Phases 2–4 complete. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
+🚧 In progress — Phases 0–2 (scaffolding, data & EDA, modelling) are complete for both datasets; Phase 3 (evaluation & shadow-mode A/B test) is next. Cost-sensitive threshold selection and the A/B test writeup will land as Phases 3–4 complete. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.

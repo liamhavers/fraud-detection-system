@@ -9,13 +9,14 @@ demonstrates a business-aware operating point rather than pure metric-chasing.
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import average_precision_score
 
 from src.config import COST_FALSE_NEGATIVE, COST_FALSE_POSITIVE
 
 
 def pr_auc_score(y_true: pd.Series, y_proba: np.ndarray) -> float:
     """Primary metric: precision-recall AUC."""
-    raise NotImplementedError
+    return float(average_precision_score(y_true, y_proba))
 
 
 def expected_cost(y_true: pd.Series, y_pred: np.ndarray) -> float:
