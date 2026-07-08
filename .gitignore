@@ -1,0 +1,43 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Data (never commit raw/processed data)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Model artifacts
+models/*
+!models/.gitkeep
+
+# Experiment logs (keep folder, ignore generated runs)
+experiments/*.json
+experiments/*.csv
+!experiments/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# Env vars / secrets
+.env
+kaggle.json
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Docker
+*.pid
