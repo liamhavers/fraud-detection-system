@@ -1,8 +1,22 @@
 """Tests for src/data/preprocess.py."""
 
+import numpy as np
 import pandas as pd
 
-from src.data.preprocess import time_aware_split
+from src.data.preprocess import clean, time_aware_split
+
+
+def test_clean_drops_duplicates_and_nulls() -> None:
+    df = pd.DataFrame(
+        {
+            "Time": [1, 1, 2, 3],
+            "Amount": [10.0, 10.0, 20.0, np.nan],
+        }
+    )
+    cleaned = clean(df)
+
+    assert len(cleaned) == 2
+    assert cleaned["Amount"].isnull().sum() == 0
 
 
 def test_time_aware_split_preserves_order() -> None:

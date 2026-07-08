@@ -7,7 +7,7 @@ from src.config import TEST_SIZE
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
     """Drop duplicates and handle any nulls in the raw dataset."""
-    raise NotImplementedError
+    return df.drop_duplicates().dropna().reset_index(drop=True)
 
 
 def time_aware_split(

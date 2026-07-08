@@ -2,7 +2,7 @@
 
 End-to-end fraud detection: raw transaction data → an imbalance-aware trained model → a served prediction API → basic production monitoring — plus a second, richer dataset for feature-engineering depth and a statistically rigorous offline A/B test.
 
-> **Status: scaffolding complete, modelling in progress.** The repo structure, API skeleton, and tests are in place; the trained models, evaluation results, and A/B test writeup below will be filled in as each phase lands. See [What's implemented so far](#whats-implemented-so-far).
+> **Status: Phase 1 (data & EDA) complete, modelling in progress.** Both datasets are downloaded, cleaned, time-split, and explored in `notebooks/`; `src/data/preprocess_ieee.py`'s feature engineering is implemented and leakage-checked. Trained models, evaluation results, and the A/B test writeup below will be filled in as Phases 2–4 land. See [What's implemented so far](#whats-implemented-so-far).
 
 ## Why this matters
 
@@ -79,6 +79,14 @@ IEEE-CIS results reported in README/notebook only ──────────
 - **Shadow-mode A/B test instead of an eyeballed comparison.** SMOTE vs. class-weighting is decided via a formal offline statistical comparison (bootstrapped confidence interval on the expected-cost difference between the two trained policies, replayed over held-out data) rather than just picking whichever number is bigger. See [Why a shadow-mode A/B test](#why-a-shadow-mode-ab-test) for what this does and doesn't demonstrate.
 - **IEEE-CIS kept separate from the served API.** Its raw schema is 400+ columns across two joined files — an unwieldy Pydantic request schema that would hurt the "Swagger docs as the interface" goal more than it would help. It's evaluated and written up as its own modelling exercise instead.
 
+## Phase 1 findings (EDA)
+
+Full detail and charts live in `notebooks/01_eda_creditcard.ipynb` and `notebooks/02_eda_ieee_cis.ipynb`; headline findings:
+
+**Kaggle** — 284,807 rows, 1,081 exact duplicates dropped by `clean()`. A weak baseline using *only* `Time`+`Amount` scores ROC-AUC 0.58, confirming the real fraud signal lives in the PCA components, not superficial fields. The leakage check surfaced something worth being honest about rather than hiding: 12,446 rows across the full dataset share an identical feature fingerprint (V1–V28 + Amount) with another row under a different `Time` — but **every one of them is a legitimate transaction, zero are fraud**. Given the anonymised features make the root cause unconfirmable and it can't inflate the metric that matters here, this is documented as a known data-quality caveat rather than papered over with a guessed fix.
+
+**IEEE-CIS** — 590,540 transactions, 3.5% fraud (~20x less imbalanced than Kaggle), only 24.4% with a matching identity record. Fraud rate differs sharply by that alone (7.8% with an identity match vs. 2.1% without), which is why `has_identity` is engineered as an explicit feature. Feature encoders and card-level aggregations (`card1_frequency`, `card1_mean_amount`, `time_since_last_txn_same_card`) are fit on the training split only and applied to test — fitting on the whole joined dataset before splitting would leak exactly the kind of cross-split information the Kaggle notebook's finding was a reminder to watch for. 174/394 columns are >50% null; missingness is left as native `NaN` for XGBoost (no imputation) with explicit `_is_missing` flags added for the most-null columns, since for this dataset absence often reflects *how* a transaction was made, not noise.
+
 ## Results
 
 *To be filled in after training and evaluation (Phase 2–3):*
@@ -105,11 +113,12 @@ IEEE-CIS results reported in README/notebook only ──────────
 - [x] Test scaffolding (`pytest`, API + preprocessing tests)
 - [x] Dockerfile / docker-compose
 - [x] CI workflow (lint + test on push)
-- [ ] Kaggle EDA notebook
-- [ ] IEEE-CIS EDA notebook (categorical/missingness focus)
-- [ ] Data loading, cleaning, time-aware split (both datasets)
+- [x] Kaggle EDA notebook (class imbalance, distributions, correlation, leakage checks)
+- [x] IEEE-CIS EDA notebook (cardinality, missingness, engineered features)
+- [x] Data loading, cleaning, time-aware split (both datasets)
+- [x] IEEE-CIS feature engineering (`preprocess_ieee.py`) — encoders fit on train only, applied to test
 - [ ] Baseline logistic regression + XGBoost training, SMOTE vs. class-weighting comparison
-- [ ] IEEE-CIS feature engineering and training
+- [ ] IEEE-CIS XGBoost training
 - [ ] Evaluation: PR-AUC, confusion matrices, cost-sensitive threshold (both datasets)
 - [x] Bootstrap confidence interval logic (`ab_test.py`) — statistical core in place, awaiting real trained-model costs to compare
 - [ ] Shadow-mode A/B test full writeup (results + limitations paragraph)
@@ -142,11 +151,20 @@ kaggle datasets download -d mlg-ulb/creditcardfraud -p data/raw/creditcard --unz
 
 **IEEE-CIS Fraud Detection** (`ieee-fraud-detection`) — the feature-engineering showcase:
 
+1. Accept the competition rules at [kaggle.com/c/ieee-fraud-detection/rules](https://www.kaggle.com/c/ieee-fraud-detection/rules) first — the API returns a 403 until you do.
+2. Download and unzip (the competition API doesn't support `--unzip` the way dataset downloads do):
+
 ```bash
-kaggle competitions download -c ieee-fraud-detection -p data/raw/ieee_cis --unzip
+kaggle competitions download -c ieee-fraud-detection -p data/raw/ieee_cis
+python -c "import zipfile; zipfile.ZipFile('data/raw/ieee_cis/ieee-fraud-detection.zip').extractall('data/raw/ieee_cis')"
+rm data/raw/ieee_cis/ieee-fraud-detection.zip
 ```
 
-(Requires accepting the competition rules on Kaggle first.) This places `train_transaction.csv` and `train_identity.csv` in `data/raw/ieee_cis/`.
+This produces `train_transaction.csv`, `train_identity.csv`, plus unlabeled `test_*`/`sample_submission.csv` files from the Kaggle competition itself (leaderboard submission files with no fraud labels — this project does its own time-aware split of the labeled training data instead, so those can be deleted):
+
+```bash
+rm data/raw/ieee_cis/test_transaction.csv data/raw/ieee_cis/test_identity.csv data/raw/ieee_cis/sample_submission.csv
+```
 
 ### 3. Train
 
@@ -214,7 +232,7 @@ fraud-detection-system/
 │   └── config.py             # paths, thresholds, hyperparameters
 ├── api/                # FastAPI app + Pydantic schemas (Kaggle model only)
 ├── models/              # gitignored model artifacts
-├── tests/
+├── tests/                # test_preprocess, test_preprocess_ieee, test_ab_test, test_api
 ├── experiments/          # logged run metrics (json/csv)
 ├── Dockerfile
 └── docker-compose.yml

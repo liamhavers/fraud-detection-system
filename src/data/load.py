@@ -2,7 +2,13 @@
 
 import pandas as pd
 
-from src.config import IEEE_IDENTITY_FILE, IEEE_TRANSACTION_FILE, RAW_DATA_FILE
+from src.config import (
+    CREDITCARD_RAW_DIR,
+    IEEE_IDENTITY_FILE,
+    IEEE_RAW_DIR,
+    IEEE_TRANSACTION_FILE,
+    RAW_DATA_FILE,
+)
 
 
 def download_dataset() -> None:
@@ -10,7 +16,13 @@ def download_dataset() -> None:
 
     Requires a Kaggle API token (~/.kaggle/kaggle.json). See README for setup.
     """
-    raise NotImplementedError
+    from kaggle.api.kaggle_api_extended import KaggleApi
+
+    api = KaggleApi()
+    api.authenticate()
+    api.dataset_download_files(
+        "mlg-ulb/creditcardfraud", path=str(CREDITCARD_RAW_DIR), unzip=True
+    )
 
 
 def download_ieee_dataset() -> None:
@@ -18,7 +30,20 @@ def download_ieee_dataset() -> None:
 
     Requires accepting the competition rules on Kaggle first. See README for setup.
     """
-    raise NotImplementedError
+    from kaggle.api.kaggle_api_extended import KaggleApi
+
+    api = KaggleApi()
+    api.authenticate()
+    api.competition_download_files(
+        "ieee-fraud-detection", path=str(IEEE_RAW_DIR), quiet=False
+    )
+
+    import zipfile
+
+    zip_path = IEEE_RAW_DIR / "ieee-fraud-detection.zip"
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(IEEE_RAW_DIR)
+    zip_path.unlink()
 
 
 def load_raw_data() -> pd.DataFrame:
