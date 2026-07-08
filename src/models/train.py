@@ -2,8 +2,6 @@
 
 import pandas as pd
 
-from src.config import XGB_PARAMS
-
 
 def train_with_class_weighting(X_train: pd.DataFrame, y_train: pd.Series):
     """Fit an XGBoost model using scale_pos_weight for imbalance handling."""
