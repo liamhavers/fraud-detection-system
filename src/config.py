@@ -8,6 +8,7 @@ DATA_RAW_DIR = ROOT_DIR / "data" / "raw"
 DATA_PROCESSED_DIR = ROOT_DIR / "data" / "processed"
 MODELS_DIR = ROOT_DIR / "models"
 EXPERIMENTS_DIR = ROOT_DIR / "experiments"
+REPORTS_DIR = ROOT_DIR / "reports"
 
 # Kaggle Credit Card Fraud dataset — backs the served model.
 CREDITCARD_RAW_DIR = DATA_RAW_DIR / "creditcard"
@@ -50,7 +51,9 @@ XGB_PARAMS = {
 # justified/tuned against the dataset and documented in the README.
 COST_FALSE_NEGATIVE = 100.0  # average fraud loss when a fraud is missed
 COST_FALSE_POSITIVE = 5.0  # customer friction / investigation cost
-DECISION_THRESHOLD = 0.5  # overwritten once cost-sensitive analysis is done
+# Cost-minimising threshold for the class-weighted policy (chosen as primary
+# in Phase 3 — see README "Phase 3" for the shadow-mode A/B test reasoning).
+DECISION_THRESHOLD = 0.29
 
 # --- Drift monitoring ---
 DRIFT_PSI_THRESHOLD = 0.2

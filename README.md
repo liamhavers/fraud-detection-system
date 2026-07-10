@@ -17,7 +17,7 @@ These decisions were made deliberately up front, to keep the project focused rat
 - **Two datasets, two different jobs**: Most fraud-detection portfolio projects stop at the Kaggle Credit Card Fraud dataset — it's clean, fast to work with, and consequently used in hundreds of near-identical repos. It's kept here as the dataset behind the **served model**, because its small anonymised feature set is realistic for a low-latency `/predict` endpoint. Alongside it, this project also uses **IEEE-CIS Fraud Detection** — raw, non-anonymised transaction and identity fields — as a **modelling-depth showcase**: real categorical encoding, joins, and missing-data strategy, rather than fitting a model to precomputed PCA components. IEEE-CIS isn't wired into the live API (see [Architecture](#architecture) for why); it's evaluated and written up on its own.
 - **Time-aware train/test split**: Both datasets' time columns (`Time` for Kaggle, `TransactionDT` for IEEE-CIS) are used to split chronologically rather than shuffle randomly — training data precedes test data. This mirrors production, where a model only ever sees past transactions at training time; a random split would leak future distribution information into training and overstate performance.
 - **PR-AUC over accuracy/ROC-AUC**: With ~0.17% positive class in the Kaggle data, accuracy is meaningless and ROC-AUC can look deceptively good due to the large true-negative volume. PR-AUC is reported as the headline metric for both datasets.
-- **Cost-sensitive threshold selection over a default 0.5 cutoff**: An operating threshold is chosen to minimise *expected cost* using illustrative unit costs (false negative ≈ average fraud loss, false positive ≈ customer friction / manual investigation cost), rather than defaulting to a 0.5 probability cutoff. *Results and the full trade-off writeup land here once Phase 3 is complete.*
+- **Cost-sensitive threshold selection over a default 0.5 cutoff**: An operating threshold is chosen to minimise *expected cost* using illustrative unit costs (false negative = £100 average fraud loss, false positive = £5 customer friction / manual investigation cost — see `src/config.py`), rather than defaulting to a 0.5 probability cutoff. On the Kaggle test set this pulls the threshold down to 0.29 for the class-weighted model, well below 0.5 — because a missed fraud costs 20x more than a false alarm, the model should flag more readily than a naive cutoff would. See [Phase 3](#phase-3--evaluation--shadow-mode-ab-testing-complete) for the full numbers.
 - **Shadow-mode A/B test, not a live experiment**: I wanted hands-on practice with the *statistics* behind A/B testing — confidence intervals, hypothesis testing, effect size — which I hadn't built before. A live, traffic-splitting production experiment isn't achievable in a portfolio project with no real users, so this project instead replays historical held-out data through two competing modelling policies (SMOTE-resampling vs. class-weighting) and statistically compares their outcomes offline (bootstrapped confidence interval on the expected-cost difference, rather than just picking whichever number is bigger). **I'm explicit that this is a simulation, not production A/B-testing experience**: it has no real traffic split, no protection against novelty or seasonality effects, and none of the online-experimentation infrastructure a live test would need. It's deliberate practice of the underlying statistical reasoning, done honestly rather than dressed up as something it isn't.
 - **IEEE-CIS kept out of the served API**: Its raw schema is 400+ columns across two joined files — an unwieldy Pydantic request schema that would hurt the "Swagger docs as the interface" goal more than it would help. It's evaluated and written up as its own modelling exercise instead.
 
@@ -91,8 +91,9 @@ fraud-detection-system/
 │   └── config.py             # paths, thresholds, hyperparameters
 ├── api/                # FastAPI app + Pydantic schemas (Kaggle model only)
 ├── models/              # gitignored model artifacts
-├── tests/                # test_preprocess, test_preprocess_ieee, test_ab_test, test_api
+├── tests/                # test_preprocess, test_preprocess_ieee, test_train, test_evaluate, test_ab_test, test_api
 ├── experiments/          # logged run metrics (json/csv)
+├── reports/              # PR curve + confusion matrix plots (committed, for the README)
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -117,10 +118,24 @@ fraud-detection-system/
 - [x] IEEE-CIS XGBoost training on the engineered feature set — PR-AUC 0.497 against a 3.5% base fraud rate. While building this, found and fixed a real gap in `preprocess_ieee.py`: 17 identity/device columns (`id_12`–`id_38`, `DeviceType`, `DeviceInfo`) were never added to the categorical-encoding list from Phase 1, so they were still raw strings and would have failed at `fit()`. Fixed by extending the same fit-on-train-only label-encoding path already used for `ProductCD`/`card4`/etc., guarded to only touch columns actually present (so the synthetic-data unit tests still pass without needing every identity column).
 - [x] Simple experiment tracking — each training run logs hyperparameters + PR-AUC per model to a timestamped JSON file under `experiments/`
 
-### Phase 3 — Evaluation & Shadow-Mode A/B Testing
-- [ ] PR-AUC, precision-recall curve, confusion matrix at candidate thresholds, cost-sensitive threshold selection (both datasets) — results to report here: PR-AUC, chosen decision threshold, expected cost reduction vs. a naive baseline, precision/recall at the chosen threshold (Kaggle); PR-AUC and key engineered features and why they helped (IEEE-CIS)
-- [x] Bootstrap confidence interval logic (`ab_test.py`) — statistical core in place, awaiting real trained-model costs to compare
-- [ ] Shadow-mode A/B test full writeup (SMOTE vs. class-weighting) — expected cost per policy, bootstrapped 95% CI on the difference, whether it's statistically distinguishable from noise, and the limitations of this simulation vs. a real online experiment (see [Phase 0 Decisions](#phase-0-decisions-locked))
+### Phase 3 — Evaluation & Shadow-Mode A/B Testing (complete)
+- [x] PR-AUC, precision-recall curve, confusion matrix at candidate thresholds, cost-sensitive threshold selection (Kaggle) — evaluated on the held-out, time-ordered test set (56,746 transactions, 74 fraud):
+
+  | Policy | PR-AUC | Cost-minimising threshold | Confusion matrix (TP / FP / TN / FN) | Expected cost | Cost reduction vs. naive baseline |
+  |---|---|---|---|---|---|
+  | XGBoost + class-weighting | 0.798 | 0.29 | 58 / 19 / 56,653 / 16 | 1,695 | 77.1% |
+  | XGBoost + SMOTE | 0.789 | 0.88 | 57 / 12 / 56,660 / 17 | 1,760 | 76.2% |
+
+  The naive baseline ("never flag a transaction") costs 7,400 (74 missed frauds × £100). Both policies cut expected cost by roughly three-quarters. Note how differently the two policies land on the probability scale — class-weighting's optimal cutoff (0.29) sits well below SMOTE's (0.88), a reminder that "the same" model trained two different ways can require entirely different operating points; picking 0.5 by default for either would have been a meaningfully worse decision than sweeping for the cost-minimising cut. *(Simplification worth flagging: the threshold is selected and evaluated on the same held-out test set here, rather than a separate validation slice — reasonable for a single train/test split, but in production this would risk tailoring the cutoff to that set's specific noise.)*
+
+  <p align="center">
+    <img src="reports/pr_curve_kaggle.png" alt="Precision-recall curve comparing the class-weighted and SMOTE policies" width="500"><br>
+    <img src="reports/confusion_matrix_class_weighted.png" alt="Confusion matrix for the class-weighted policy at its chosen threshold" width="280">
+    <img src="reports/confusion_matrix_smote.png" alt="Confusion matrix for the SMOTE policy at its chosen threshold" width="280">
+  </p>
+- [x] IEEE-CIS PR-AUC (0.497 against a 3.5% base fraud rate) reported in [Phase 2](#phase-2--modelling-complete) — no separate threshold/A-B exercise here since this dataset isn't served live (see [Phase 0 Decisions](#phase-0-decisions-locked))
+- [x] Bootstrap confidence interval logic (`ab_test.py`)
+- [x] Shadow-mode A/B test full writeup (SMOTE vs. class-weighting) — replayed the same held-out test set through both policies' chosen thresholds and compared per-transaction expected cost with a 10,000-resample percentile bootstrap: mean cost/transaction was 0.0299 for class-weighting vs. 0.0310 for SMOTE (a 3.7% relative difference), with SMOTE nominally more expensive. But the 95% bootstrap CI on that difference is **[-0.0185, 0.0208] — it spans zero, so the difference is *not* statistically distinguishable from noise** at this sample size (only 74 fraud cases in the test set). **Read honestly: this is an inconclusive result, not a null one** — with so few positive-class examples, the test has limited power to detect an effect this small, exactly the kind of sample-size/power consideration this exercise was built to develop intuition for. Class-weighting is kept as the primary served policy (`DECISION_THRESHOLD = 0.29` in `src/config.py`) on the strength of its point-estimate edge on both cost and PR-AUC, and because it's the simpler training path (no resampling step) — not because the A/B test proved it superior. In a live setting, the honest next step here wouldn't be "ship class-weighting and move on," it'd be "keep collecting data, or treat this as a tie." See [Phase 0 Decisions](#phase-0-decisions-locked) for what this simulation does and doesn't demonstrate versus a real online experiment.
 
 ### Phase 4 — Productionisation
 - [ ] Wire up `/predict` inference with the trained Kaggle model
@@ -240,4 +255,4 @@ docker run -p 8000:8000 fraud-detection
 
 ## Status
 
-🚧 In progress — Phases 0–2 (scaffolding, data & EDA, modelling) are complete for both datasets; Phase 3 (evaluation & shadow-mode A/B test) is next. Cost-sensitive threshold selection and the A/B test writeup will land as Phases 3–4 complete. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
+🚧 In progress — Phases 0–3 (scaffolding, data & EDA, modelling, evaluation & shadow-mode A/B test) are complete; Phase 4 (productionisation — wiring the chosen model into `/predict`, drift monitoring) is next. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
