@@ -15,11 +15,16 @@ CREDITCARD_RAW_DIR = DATA_RAW_DIR / "creditcard"
 RAW_DATA_FILE = CREDITCARD_RAW_DIR / "creditcard.csv"
 TRAIN_DATA_FILE = DATA_PROCESSED_DIR / "train.csv"
 TEST_DATA_FILE = DATA_PROCESSED_DIR / "test.csv"
-MODEL_ARTIFACT_FILE = MODELS_DIR / "model.pkl"
 # Both imbalance-handling variants are kept around (not just the winner) so
 # the Phase 3 shadow-mode A/B test has two real trained policies to compare.
 MODEL_ARTIFACT_CLASS_WEIGHTED_FILE = MODELS_DIR / "model_class_weighted.pkl"
 MODEL_ARTIFACT_SMOTE_FILE = MODELS_DIR / "model_smote.pkl"
+# Class-weighting was kept as the primary served policy after Phase 3's
+# shadow-mode A/B test came back statistically inconclusive (95% CI on the
+# cost difference spanned zero) — chosen on point-estimate cost/PR-AUC and
+# simplicity grounds, not because the test proved it superior. See README
+# "Phase 3" for the full reasoning.
+MODEL_ARTIFACT_FILE = MODEL_ARTIFACT_CLASS_WEIGHTED_FILE
 
 # IEEE-CIS dataset — feature-engineering showcase, not served via the API.
 IEEE_RAW_DIR = DATA_RAW_DIR / "ieee_cis"

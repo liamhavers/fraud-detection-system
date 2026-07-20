@@ -91,9 +91,12 @@ fraud-detection-system/
 │   └── config.py             # paths, thresholds, hyperparameters
 ├── api/                # FastAPI app + Pydantic schemas (Kaggle model only)
 ├── models/              # gitignored model artifacts
-├── tests/                # test_preprocess, test_preprocess_ieee, test_train, test_evaluate, test_ab_test, test_api
+├── tests/                # test_preprocess, test_preprocess_ieee, test_train, test_evaluate, test_ab_test, test_predict, test_drift, test_api
 ├── experiments/          # logged run metrics (json/csv)
 ├── reports/              # PR curve + confusion matrix plots (committed, for the README)
+├── sample_transaction.json  # example /predict request body
+├── requirements.txt       # full dev/training environment
+├── requirements-api.txt   # lean runtime deps for the Docker image only
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -137,9 +140,10 @@ fraud-detection-system/
 - [x] Bootstrap confidence interval logic (`ab_test.py`)
 - [x] Shadow-mode A/B test full writeup (SMOTE vs. class-weighting) — replayed the same held-out test set through both policies' chosen thresholds and compared per-transaction expected cost with a 10,000-resample percentile bootstrap: mean cost/transaction was 0.0299 for class-weighting vs. 0.0310 for SMOTE (a 3.7% relative difference), with SMOTE nominally more expensive. But the 95% bootstrap CI on that difference is **[-0.0185, 0.0208] — it spans zero, so the difference is *not* statistically distinguishable from noise** at this sample size (only 74 fraud cases in the test set). **Read honestly: this is an inconclusive result, not a null one** — with so few positive-class examples, the test has limited power to detect an effect this small, exactly the kind of sample-size/power consideration this exercise was built to develop intuition for. Class-weighting is kept as the primary served policy (`DECISION_THRESHOLD = 0.29` in `src/config.py`) on the strength of its point-estimate edge on both cost and PR-AUC, and because it's the simpler training path (no resampling step) — not because the A/B test proved it superior. In a live setting, the honest next step here wouldn't be "ship class-weighting and move on," it'd be "keep collecting data, or treat this as a tie." See [Phase 0 Decisions](#phase-0-decisions-locked) for what this simulation does and doesn't demonstrate versus a real online experiment.
 
-### Phase 4 — Productionisation
-- [ ] Wire up `/predict` inference with the trained Kaggle model
-- [ ] `drift.py` — PSI-based feature drift check between a reference window and a simulated "new" window
+### Phase 4 — Productionisation (complete)
+- [x] Wire up `/predict` inference with the trained Kaggle model — `FraudPredictor` (`src/models/predict.py`) loads the class-weighted artifact once at API startup (via FastAPI's `lifespan`, so a missing model artifact fails fast rather than on someone's first request), remaps the request's lowercase `time`/`v1`..`v28`/`amount` fields into the exact column names/order the model was trained on, and returns `fraud_probability`, `flagged` (at `DECISION_THRESHOLD = 0.29`), and the threshold applied. Verified end-to-end against both a real legitimate transaction (probability 0.0001, not flagged) and a real fraud transaction from the dataset (probability 0.9999, flagged) — see `sample_transaction.json`. Every request is logged with a timestamp, input summary, and output (`api/main.py`).
+- [x] `drift.py` — PSI (Population Stability Index) per feature, quantile-binned on the reference window. Two real checks run via `python -m src.monitoring.drift`: (1) train vs. test windows on the actual Kaggle split — `Time` shows enormous PSI (8.3), but that's a structural artifact of a chronological split (test is definitionally "later," not "drifted"), not a meaningful alarm; more interestingly, five PCA features (`V1`, `V3`, `V28`, `V11`, `V25`) show real, if modest, distribution shift across the same time boundary — a genuine finding, left visible rather than tuned away. (2) A synthetic "new window" with `Amount` inflated 3x — PSI on `Amount` correctly jumps from 0.01 (stable) to 4.7 (flagged), confirming the check actually catches injected drift and isn't just reporting noise.
+- [x] Docker — rebuilt with a dedicated `requirements-api.txt` (fastapi/pandas/xgboost/scikit-learn/joblib only) rather than the full dev `requirements.txt`, cutting the image from 2.29GB to 1.82GB by dropping Jupyter/Kaggle/matplotlib/seaborn, none of which the served API touches. `xgboost` is pinned exactly (`==3.3.0`, matching the training environment) in both requirements files — a loose `>=` constraint let the container resolve a different xgboost version than what pickled the model artifact, which is a real (if often silent) compatibility risk for any pickle-based deployment. `docker build && docker run` and `docker compose up` both verified working end-to-end against a real trained model.
 
 ### Phase 5 — Polish & Packaging
 - [ ] Full results write-up in this README (PR-AUC, chosen threshold, expected cost reduction, both datasets)
@@ -153,7 +157,7 @@ fraud-detection-system/
 - **Datasets**: Kaggle Credit Card Fraud (served model) + IEEE-CIS Fraud Detection (feature-engineering showcase, not served)
 - **Statistical testing**: `scipy`/`numpy` — bootstrap confidence intervals and significance testing for the A/B comparison
 - **API**: FastAPI + Pydantic request validation
-- **Containerisation**: Docker
+- **Containerisation**: Docker, built from a lean `requirements-api.txt` (not the full dev environment) with `xgboost` pinned exactly to match the version that trained the pickled model
 - **Experiment tracking**: Flat JSON/CSV run logs in `experiments/`
 - **Testing**: pytest
 - **Monitoring**: Structured prediction logging + PSI-based feature drift check
@@ -255,4 +259,4 @@ docker run -p 8000:8000 fraud-detection
 
 ## Status
 
-🚧 In progress — Phases 0–3 (scaffolding, data & EDA, modelling, evaluation & shadow-mode A/B test) are complete; Phase 4 (productionisation — wiring the chosen model into `/predict`, drift monitoring) is next. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
+🚧 In progress — Phases 0–4 (scaffolding, data & EDA, modelling, evaluation & shadow-mode A/B test, productionisation) are complete: `docker build && docker run` serves a real trained model behind `/predict`, verified against both a legitimate and a fraud transaction. Phase 5 (README polish, packaging) is next. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.

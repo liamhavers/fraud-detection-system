@@ -1,0 +1,15 @@
+# Runtime dependencies for the served API only — see requirements.txt for
+# the full dev/training/notebook environment. Keeping this separate avoids
+# baking Jupyter, matplotlib, and Kaggle's SDK into the Docker image; those
+# are only needed for local development, not for serving /predict.
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.4
+# Pinned exactly to match requirements.txt / whatever version trained the
+# pickled model artifacts — see the comment there for why this can't float.
+xgboost==3.3.0
+joblib>=1.3
+
+fastapi>=0.111
+uvicorn[standard]>=0.30
+pydantic>=2.7
