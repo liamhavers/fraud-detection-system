@@ -2,7 +2,11 @@
 
 import numpy as np
 
-from src.models.ab_test import bootstrap_cost_difference, compare_policies, per_transaction_cost
+from src.models.ab_test import (
+    bootstrap_cost_difference,
+    compare_policies,
+    per_transaction_cost,
+)
 
 
 def test_bootstrap_detects_known_cost_difference() -> None:

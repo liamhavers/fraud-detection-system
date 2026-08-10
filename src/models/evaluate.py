@@ -12,7 +12,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from sklearn.metrics import average_precision_score, confusion_matrix, precision_recall_curve
+from sklearn.metrics import (
+    average_precision_score,
+    confusion_matrix,
+    precision_recall_curve,
+)
 
 from src.config import COST_FALSE_NEGATIVE, COST_FALSE_POSITIVE
 
