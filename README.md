@@ -280,7 +280,7 @@ The model artifact is intentionally never committed to git, so Render's build �
 5. Choose the **Free** instance type, then **Create Web Service**.
 6. First build takes a few minutes (installing dependencies + the ~600KB model download); Render redeploys automatically on every push to `main`.
 
-Free-tier services spin down after 15 minutes idle and cold-start on the next request (a few seconds, not minutes — the model download only happens at build time, not on every cold start). Once live, the Swagger docs are at `<your-render-url>/docs`.
+Free-tier services spin down after 15 minutes idle and cold-start on the next request — expect roughly 30–60 seconds for the container to spin back up, not the sub-second latency of a warm instance (the model download only happens once at build time, not on every cold start, so it isn't what's slow here — it's Render's free tier itself pausing idle containers). Once live, the Swagger docs are at `<your-render-url>/docs`.
 
 ## Next Steps
 
