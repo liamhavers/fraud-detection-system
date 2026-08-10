@@ -1,8 +1,12 @@
 # Credit Card Fraud Detection System
 
+[![CI](https://github.com/liamhavers/fraud-detection-system/actions/workflows/ci.yml/badge.svg)](https://github.com/liamhavers/fraud-detection-system/actions/workflows/ci.yml)
+
 End-to-end fraud detection: raw transaction data → an imbalance-aware trained model → a served prediction API → basic production monitoring — plus a second, richer dataset for feature-engineering depth and a statistically rigorous offline A/B test.
 
 Built as a portfolio project demonstrating end-to-end, production-minded ML engineering for tech/finance Data Scientist roles.
+
+**Live demo**: not yet deployed — see [Deploy to Render](#deploy-to-render-optional) for the (manual, one-time) steps to stand one up on the free tier.
 
 ## Problem Statement
 
@@ -58,7 +62,7 @@ These decisions were made deliberately up front, to keep the project focused rat
           │  sensitive        │   │  statistical compare ││
           │  threshold        │   │  (bootstrap CI)      ││
           └─────────┬────────┘   └─────────────────────┘│
-                    │  model.pkl (Kaggle only)            │
+                    │  model_class_weighted.pkl (served)  │
           ┌─────────▼────────┐                            │
           │  src/models/      │                            │
           │  predict.py       │                            │
@@ -146,8 +150,8 @@ fraud-detection-system/
 - [x] Docker — rebuilt with a dedicated `requirements-api.txt` (fastapi/pandas/xgboost/scikit-learn/joblib only) rather than the full dev `requirements.txt`, cutting the image from 2.29GB to 1.82GB by dropping Jupyter/Kaggle/matplotlib/seaborn, none of which the served API touches. `xgboost` is pinned exactly (`==3.3.0`, matching the training environment) in both requirements files — a loose `>=` constraint let the container resolve a different xgboost version than what pickled the model artifact, which is a real (if often silent) compatibility risk for any pickle-based deployment. `docker build && docker run` and `docker compose up` both verified working end-to-end against a real trained model.
 
 ### Phase 5 — Polish & Packaging
-- [ ] Full results write-up in this README (PR-AUC, chosen threshold, expected cost reduction, both datasets)
-- [ ] Stretch: deploy on Render/Railway free tier and link a live demo URL
+- [x] Full results write-up in this README (PR-AUC, chosen threshold, expected cost reduction, both datasets) — written incrementally as each phase landed (see [Phase 2](#phase-2--modelling-complete) and [Phase 3](#phase-3--evaluation--shadow-mode-ab-testing-complete)) rather than backfilled at the end, so the numbers stayed attached to the reasoning behind them
+- [ ] Stretch: deploy on Render/Railway free tier and link a live demo URL — groundwork is done (Dockerfile fetches the model from a [published release](https://github.com/liamhavers/fraud-detection-system/releases/tag/model-v1) when building from a fresh clone, verified locally by simulating exactly that), see [Deploy to Render](#deploy-to-render-optional). Actually standing up the service needs a Render account, which is a manual, one-time step on my end rather than something scriptable from here.
 
 ## Tech Stack
 
@@ -236,7 +240,15 @@ curl -X POST http://localhost:8000/predict \
   -d @sample_transaction.json
 ```
 
-### 6. Test
+### 6. Check for Feature Drift
+
+```bash
+python -m src.monitoring.drift
+```
+
+Runs the PSI drift report on the real train/test split, plus a synthetic drifted-window demo — see [Phase 4](#phase-4--productionisation-complete) for what it finds.
+
+### 7. Test
 
 ```bash
 pytest tests/ -v
@@ -244,10 +256,31 @@ pytest tests/ -v
 
 ### Docker
 
+Train a model first (step 3) so `models/model_class_weighted.pkl` exists locally — the Dockerfile bakes in whatever's already on disk. (If it's missing — e.g. building from a fresh clone with no local training run — the build falls back to downloading the published artifact from this repo's [GitHub Releases](https://github.com/liamhavers/fraud-detection-system/releases/tag/model-v1) instead of failing. This is what makes the [Render deploy](#deploy-to-render-optional) below work from a plain `git clone`, since gitignored model artifacts never make it into that clone.)
+
 ```bash
 docker build -t fraud-detection .
 docker run -p 8000:8000 fraud-detection
 ```
+
+Or with Docker Compose:
+
+```bash
+docker compose up
+```
+
+### Deploy to Render (optional)
+
+The model artifact is intentionally never committed to git, so Render's build — which clones straight from GitHub — relies on the fallback download above to produce a working image. No Kaggle credentials or training step required at deploy time; it's a ~600KB download of the same [`model-v1` release asset](https://github.com/liamhavers/fraud-detection-system/releases/tag/model-v1) referenced in the Dockerfile.
+
+1. Push this repo to GitHub (already done if you're reading this on GitHub).
+2. On [render.com](https://render.com), **New > Web Service**, connect this repo.
+3. Render auto-detects the root `Dockerfile` — leave runtime as **Docker**.
+4. Set **Health Check Path** to `/health`.
+5. Choose the **Free** instance type, then **Create Web Service**.
+6. First build takes a few minutes (installing dependencies + the ~600KB model download); Render redeploys automatically on every push to `main`.
+
+Free-tier services spin down after 15 minutes idle and cold-start on the next request (a few seconds, not minutes — the model download only happens at build time, not on every cold start). Once live, the Swagger docs are at `<your-render-url>/docs`.
 
 ## Next Steps
 
@@ -259,4 +292,4 @@ docker run -p 8000:8000 fraud-detection
 
 ## Status
 
-🚧 In progress — Phases 0–4 (scaffolding, data & EDA, modelling, evaluation & shadow-mode A/B test, productionisation) are complete: `docker build && docker run` serves a real trained model behind `/predict`, verified against both a legitimate and a fraud transaction. Phase 5 (README polish, packaging) is next. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
+✅ Feature-complete — Phases 0–5 are done: two datasets modelled and evaluated, a statistically-honest shadow-mode A/B test, a served `/predict` API with drift monitoring, and this README written incrementally alongside the work rather than backfilled. The only open item is the optional stretch goal — a live Render deploy, for which the groundwork (Dockerfile fetches the model from a published release on a fresh clone) is done and verified, but standing up the actual hosted service is a manual account-linking step. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
