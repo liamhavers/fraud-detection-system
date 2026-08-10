@@ -6,7 +6,7 @@ End-to-end fraud detection: raw transaction data → an imbalance-aware trained 
 
 Built as a portfolio project demonstrating end-to-end, production-minded ML engineering for tech/finance Data Scientist roles.
 
-**Live demo**: not yet deployed — see [Deploy to Render](#deploy-to-render-optional) for the (manual, one-time) steps to stand one up on the free tier.
+**Live demo**: [fraud-detection-api-u874.onrender.com/docs](https://fraud-detection-api-u874.onrender.com/docs) — interactive Swagger UI, try `/predict` directly. Hosted on Render's free tier, so it spins down after 15 minutes idle; the first request after a while may take 30–60 seconds to cold-start (see [Deploy to Render](#deploy-to-render-optional) for how this is set up).
 
 ## Problem Statement
 
@@ -151,7 +151,7 @@ fraud-detection-system/
 
 ### Phase 5 — Polish & Packaging
 - [x] Full results write-up in this README (PR-AUC, chosen threshold, expected cost reduction, both datasets) — written incrementally as each phase landed (see [Phase 2](#phase-2--modelling-complete) and [Phase 3](#phase-3--evaluation--shadow-mode-ab-testing-complete)) rather than backfilled at the end, so the numbers stayed attached to the reasoning behind them
-- [ ] Stretch: deploy on Render/Railway free tier and link a live demo URL — groundwork is done (Dockerfile fetches the model from a [published release](https://github.com/liamhavers/fraud-detection-system/releases/tag/model-v1) when building from a fresh clone, verified locally by simulating exactly that), see [Deploy to Render](#deploy-to-render-optional). Actually standing up the service needs a Render account, which is a manual, one-time step on my end rather than something scriptable from here.
+- [x] Stretch: deploy on Render/Railway free tier and link a live demo URL — live at [fraud-detection-api-u874.onrender.com/docs](https://fraud-detection-api-u874.onrender.com/docs). Built from a fresh GitHub clone with no local artifacts present, confirming the [published-release fallback](https://github.com/liamhavers/fraud-detection-system/releases/tag/model-v1) in the Dockerfile actually works end-to-end, not just in local simulation — verified by hitting `/predict` against the live service with the same `sample_transaction.json` payload used everywhere else in this README and getting the identical probability (0.0001395379804307595) back.
 
 ## Tech Stack
 
@@ -292,4 +292,4 @@ Free-tier services spin down after 15 minutes idle and cold-start on the next re
 
 ## Status
 
-✅ Feature-complete — Phases 0–5 are done: two datasets modelled and evaluated, a statistically-honest shadow-mode A/B test, a served `/predict` API with drift monitoring, and this README written incrementally alongside the work rather than backfilled. The only open item is the optional stretch goal — a live Render deploy, for which the groundwork (Dockerfile fetches the model from a published release on a fresh clone) is done and verified, but standing up the actual hosted service is a manual account-linking step. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
+✅ Complete, including the stretch goal — Phases 0–5 are all done: two datasets modelled and evaluated, a statistically-honest shadow-mode A/B test, a served `/predict` API with drift monitoring, this README written incrementally alongside the work rather than backfilled, and a [live demo](https://fraud-detection-api-u874.onrender.com/docs) on Render's free tier. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
