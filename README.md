@@ -92,12 +92,14 @@ fraud-detection-system/
 │   ├── data/                 # load, preprocess (Kaggle), preprocess_ieee (IEEE-CIS)
 │   ├── models/                # train, evaluate, ab_test, predict
 │   ├── monitoring/            # drift.py
+│   ├── pandas_reference/      # original pandas pipeline, kept for comparison (not used by training/API)
 │   └── config.py             # paths, thresholds, hyperparameters
 ├── api/                # FastAPI app + Pydantic schemas (Kaggle model only)
 ├── models/              # gitignored model artifacts
-├── tests/                # test_preprocess, test_preprocess_ieee, test_train, test_evaluate, test_ab_test, test_predict, test_drift, test_api
+├── tests/                # test_preprocess, test_preprocess_ieee, test_train, test_evaluate, test_ab_test, test_predict, test_drift, test_api; pandas_reference/ for the pandas pipeline
 ├── experiments/          # logged run metrics (json/csv)
 ├── reports/              # PR curve + confusion matrix plots (committed, for the README)
+├── benchmarks/           # pandas vs. polars parity check + timings
 ├── sample_transaction.json  # example /predict request body
 ├── requirements.txt       # full dev/training environment
 ├── requirements-api.txt   # lean runtime deps for the Docker image only
@@ -153,9 +155,32 @@ fraud-detection-system/
 - [x] Full results write-up in this README (PR-AUC, chosen threshold, expected cost reduction, both datasets) — written incrementally as each phase landed (see [Phase 2](#phase-2--modelling-complete) and [Phase 3](#phase-3--evaluation--shadow-mode-ab-testing-complete)) rather than backfilled at the end, so the numbers stayed attached to the reasoning behind them
 - [x] Stretch: deploy on Render/Railway free tier and link a live demo URL — live at [fraud-detection-api-u874.onrender.com/docs](https://fraud-detection-api-u874.onrender.com/docs). Built from a fresh GitHub clone with no local artifacts present, confirming the [published-release fallback](https://github.com/liamhavers/fraud-detection-system/releases/tag/model-v1) in the Dockerfile actually works end-to-end, not just in local simulation — verified by hitting `/predict` against the live service with the same `sample_transaction.json` payload used everywhere else in this README and getting the identical probability (0.0001395379804307595) back.
 
+### Phase 6 — Polars Port (complete)
+- [x] Preprocessing and feature engineering for both datasets (`preprocess.py`, `preprocess_ieee.py`) rewritten as polars LazyFrame transforms: every step from `scan_csv` to the time-aware split to the IEEE-CIS encoders is one lazy query plan, collected only where the data crosses into scikit-learn/XGBoost (`train.py`) or where a fitted value genuinely has to exist first (the category vocabularies and missingness flags decide the output schema, so `fit_feature_encoders` is the one function that executes a query — and it collects its four aggregations together in a single pass).
+- [x] PSI in `drift.py` rebuilt from polars expressions: one query computes every feature's quantile bin edges, one query per window computes every feature's bin shares, and the PSI sum is an aggregation expression grouped by feature — no per-column numpy loop.
+- [x] Time-ordered split kept identical: same `int(n × (1 − test_size))` boundary, now with an explicitly stable sort. The pandas version used `sort_values`' default quicksort, which isn't stable; it only produced a deterministic split because both raw files happen to be pre-sorted by time. The polars version guarantees tied timestamps keep file order (and a test pins that down).
+- [x] The original pandas implementation is kept, unchanged, in [`src/pandas_reference/`](src/pandas_reference/) — same module and function names as the polars version (`load`, `preprocess`, `preprocess_ieee`, `drift`) so the two read side by side, with its original tests still running in CI under `tests/pandas_reference/`. It isn't used by training or the API; it's the baseline the port is checked and timed against.
+- [x] **Parity verified on the real data** (`python -m benchmarks.compare_pandas_polars parity`, polars vs. `src/pandas_reference/`): Kaggle train/test splits identical row-for-row; all 30 PSI values within 1e-15 and identical drift flags; IEEE-CIS category vocabularies/codes and card1 stats identical; both 446-column IEEE-CIS feature frames identical in row order, column order and values (max float difference 2e-13, from summation order in the grouped mean). As an end-to-end check, retraining on polars-produced features gives **bit-identical** XGBoost predictions for all three XGBoost models (Kaggle class-weighted, Kaggle SMOTE, IEEE-CIS), and a logistic-regression baseline within 4e-13 (one-ULP CSV-parser differences) — every reported PR-AUC above is unchanged.
+- [x] Three things the parity check surfaced, all kept visible rather than smoothed over:
+  1. **One engineered column is named differently, with identical values.** The pandas pipeline picked its 8 missing-indicator columns with an unstable sort over null fractions, and `id_22`, `id_23` and `id_27` tie exactly (0.990955 — these identity fields go missing together). pandas happened to pick `id_27`; which one it picks depends on numpy's sort internals, not the data. The polars version breaks ties by column order (`id_22`). The two indicator columns are value-identical and sit in the same position, so the feature matrix is unchanged; only the name differs.
+  2. **The Kaggle CSV changes number format mid-file.** `Time` is written as plain integers until row 153,760, then switches to `1e+05`. pandas silently read the whole column as float; polars' sampled schema inference would type it as an integer and then fail on that row, so the loader pins `Time` to Float64.
+  3. **A stale notebook output.** Re-running `02_eda_ieee_cis.ipynb` showed its categorical-cardinality chart had last been rendered before the Phase 2 fix that extended the categorical column list from 14 to 31 fields — it's now current.
+
+**Timings** — `python -m benchmarks.compare_pandas_polars timing`: each stage runs in its own process, one warm-up then the median of 5 timed runs, on an 8-core AMD Ryzen 7 5700X3D under WSL2 (12GB RAM cap), Python 3.12, pandas 3.0.3, polars 1.44.2. Raw CSVs are in the OS page cache after warm-up, so these measure compute, not cold disk reads.
+
+| Stage | pandas (median) | polars (median) | Speedup |
+|---|---:|---:|---:|
+| Kaggle: read CSV → clean → time-aware split | 1.71s | 0.19s | 9.0× |
+| IEEE-CIS: read CSVs → join → split → feature engineering | 15.59s | 3.15s | 4.9× |
+| IEEE-CIS: join → split → feature engineering (CSVs pre-loaded) | 3.94s | 0.81s | 4.9× |
+| PSI drift report, 30 Kaggle features (train vs. test) | 0.25s | 0.07s | 3.7× |
+
+Most of the end-to-end gain is CSV parsing, which polars multi-threads and pandas' C parser doesn't: in the IEEE-CIS pipeline, reading the two CSVs (~710MB) was ~75% of pandas' time. The in-memory row isolates the transforms themselves (join, sort, encoders, per-card window features), which are also ~5× faster. In absolute terms these are seconds on a dataset that fits in RAM — the practical win here is a faster iteration loop, not a pipeline that was previously infeasible. pandas is still used where it's the lingua franca: at the scikit-learn/XGBoost boundary, in the API's single-row inference path, and for plotting in the EDA notebooks.
+
 ## Tech Stack
 
 - **Language**: Python 3.11+
+- **Data pipeline**: polars LazyFrames for loading, cleaning, the time-aware split, IEEE-CIS feature engineering and PSI drift — converted to pandas only at the scikit-learn/XGBoost boundary (see [Phase 6](#phase-6--polars-port-complete) for the port, parity check and timings)
 - **Modelling**: XGBoost (chosen for native imbalanced-data handling via `scale_pos_weight`, strong tabular performance, and fast inference)
 - **Imbalance handling**: SMOTE (`imbalanced-learn`) and class-weighting, compared empirically via the shadow-mode A/B test — winner documented in `src/models/evaluate.py` and `src/models/ab_test.py`
 - **Datasets**: Kaggle Credit Card Fraud (served model) + IEEE-CIS Fraud Detection (feature-engineering showcase, not served)
@@ -254,6 +279,15 @@ Runs the PSI drift report on the real train/test split, plus a synthetic drifted
 pytest tests/ -v
 ```
 
+### 8. Reproduce the pandas → polars Parity Check and Timings
+
+```bash
+python -m benchmarks.compare_pandas_polars parity           # exits non-zero on any mismatch
+python -m benchmarks.compare_pandas_polars timing --repeats 5
+```
+
+Needs both datasets from step 2 and ~8GB of free RAM (the IEEE-CIS feature frames are ~2GB each).
+
 ### Docker
 
 Train a model first (step 3) so `models/model_class_weighted.pkl` exists locally — the Dockerfile bakes in whatever's already on disk. (If it's missing — e.g. building from a fresh clone with no local training run — the build falls back to downloading the published artifact from this repo's [GitHub Releases](https://github.com/liamhavers/fraud-detection-system/releases/tag/model-v1) instead of failing. This is what makes the [Render deploy](#deploy-to-render-optional) below work from a plain `git clone`, since gitignored model artifacts never make it into that clone.)
@@ -292,4 +326,4 @@ Free-tier services spin down after 15 minutes idle and cold-start on the next re
 
 ## Status
 
-✅ Complete, including the stretch goal — Phases 0–5 are all done: two datasets modelled and evaluated, a statistically-honest shadow-mode A/B test, a served `/predict` API with drift monitoring, this README written incrementally alongside the work rather than backfilled, and a [live demo](https://fraud-detection-api-u874.onrender.com/docs) on Render's free tier. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
+✅ Complete, including the stretch goal — Phases 0–5 are all done, plus a [polars port](#phase-6--polars-port-complete) of the data pipeline with verified pandas parity: two datasets modelled and evaluated, a statistically-honest shadow-mode A/B test, a served `/predict` API with drift monitoring, this README written incrementally alongside the work rather than backfilled, and a [live demo](https://fraud-detection-api-u874.onrender.com/docs) on Render's free tier. See the checkboxes under [Project Plan](#project-plan) for exact status per phase.
