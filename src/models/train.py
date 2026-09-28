@@ -6,6 +6,7 @@ from pathlib import Path
 
 import joblib
 import pandas as pd
+import polars as pl
 from imblearn.over_sampling import SMOTE
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
@@ -21,7 +22,7 @@ from src.config import (
     RANDOM_STATE,
     XGB_PARAMS,
 )
-from src.data.load import load_raw_data, load_raw_ieee_data
+from src.data.load import scan_raw_data, scan_raw_ieee_data
 from src.data.preprocess import clean, time_aware_split
 from src.data.preprocess_ieee import (
     engineer_features,
@@ -90,8 +91,11 @@ def log_experiment(name: str, params: dict, metrics: dict) -> Path:
 
 
 def _run_kaggle_training() -> dict:
-    df = clean(load_raw_data())
-    train_df, test_df = time_aware_split(df)
+    # Preprocessing runs in polars; the frames cross over to pandas here,
+    # at the boundary with scikit-learn / imbalanced-learn.
+    train_df, test_df = (
+        df.to_pandas() for df in pl.collect_all(time_aware_split(clean(scan_raw_data())))
+    )
     X_train, y_train = train_df.drop(columns=["Class"]), train_df["Class"]
     X_test, y_test = test_df.drop(columns=["Class"]), test_df["Class"]
 
@@ -122,10 +126,16 @@ def _run_kaggle_training() -> dict:
 
 
 def _run_ieee_training() -> dict:
-    transaction_df, identity_df = load_raw_ieee_data()
-    joined = join_transaction_identity(transaction_df, identity_df)
-    train_df, test_df = ieee_time_aware_split(joined)
-    train_fe, test_fe = engineer_features(train_df, test_df)
+    # Materialise the joined, sorted split once: fitting the encoders needs
+    # a collect, and without this both it and the final collect would
+    # re-scan and re-join the raw CSVs.
+    train_df, test_df = pl.collect_all(
+        ieee_time_aware_split(join_transaction_identity(*scan_raw_ieee_data()))
+    )
+    train_fe, test_fe = (
+        df.to_pandas()
+        for df in pl.collect_all(engineer_features(train_df.lazy(), test_df.lazy()))
+    )
 
     drop_cols = ["TransactionID", "isFraud"]
     X_train, y_train = train_fe.drop(columns=drop_cols), train_fe["isFraud"]

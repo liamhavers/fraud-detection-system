@@ -1,4 +1,9 @@
 # Core
+# polars runs the data pipeline (src/data, src/monitoring); pandas remains
+# the interchange format at the scikit-learn/XGBoost boundary and in the API.
+# pyarrow backs polars' to_pandas() conversion.
+polars>=1.44
+pyarrow>=15
 pandas>=2.2
 numpy>=1.26
 scikit-learn>=1.4

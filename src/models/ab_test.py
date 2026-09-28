@@ -117,7 +117,7 @@ if __name__ == "__main__":
         MODEL_ARTIFACT_SMOTE_FILE,
         REPORTS_DIR,
     )
-    from src.data.load import load_raw_data
+    from src.data.load import scan_raw_data
     from src.data.preprocess import clean, time_aware_split
     from src.models.evaluate import (
         confusion_counts,
@@ -130,8 +130,8 @@ if __name__ == "__main__":
     from src.models.train import log_experiment
 
     print("Loading held-out Kaggle test set and both trained policies...")
-    df = clean(load_raw_data())
-    _, test_df = time_aware_split(df)
+    _, test_lf = time_aware_split(clean(scan_raw_data()))
+    test_df = test_lf.collect().to_pandas()
     X_test, y_test = test_df.drop(columns=["Class"]), test_df["Class"]
 
     policies = {
