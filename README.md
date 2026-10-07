@@ -8,6 +8,8 @@ Built as a portfolio project demonstrating end-to-end, production-minded ML engi
 
 **Live demo**: [fraud-detection-api-u874.onrender.com/docs](https://fraud-detection-api-u874.onrender.com/docs) — interactive Swagger UI, try `/predict` directly. Hosted on Render's free tier, so it spins down after 15 minutes idle; the first request after a while may take 30–60 seconds to cold-start (see [Deploy to Render](#deploy-to-render-optional) for how this is set up).
 
+**Follow-on project**: [fraudDetection_databricks](https://github.com/liamhavers/fraudDetection_databricks) rebuilds the IEEE-CIS side of this work as a Spark pipeline on Databricks, with Delta Lake tables, past-only velocity features, MLflow model tracking with champion and challenger aliases, batch scoring and weekly PSI drift, run as one scheduled Databricks Job.
+
 ## Problem Statement
 
 > The real job isn't maximising accuracy — it's finding the operating point that minimises the *combined expected cost* of missed fraud and false alarms.
@@ -320,7 +322,7 @@ Free-tier services spin down after 15 minutes idle and cold-start on the next re
 
 - Real-time feature store instead of point-in-time PCA features, to support richer engineered features (velocity, merchant-category aggregates).
 - Productionise the A/B test: real traffic splitting, guardrail metrics, sequential-testing controls — the current version is deliberately an offline statistical exercise, not this.
-- MLflow for experiment tracking once run volume outgrows flat-file logging.
+- MLflow for experiment tracking once run volume outgrows flat-file logging. (Done in the follow-on project, [fraudDetection_databricks](https://github.com/liamhavers/fraudDetection_databricks), which logs runs to MLflow and registers models in Unity Catalog.)
 - Streaming ingestion (Kafka) for near-real-time scoring instead of request/response batch scoring.
 - Serve the IEEE-CIS model behind its own endpoint if there's a clean way to do it without an unwieldy request schema (e.g. a feature-store lookup by transaction ID instead of a raw 400-field payload).
 
