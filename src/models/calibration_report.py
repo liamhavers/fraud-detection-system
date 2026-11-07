@@ -131,8 +131,13 @@ def _markdown_table(rows: list[dict], columns: list[tuple[str, str, str]]) -> st
     return "\n".join([header, rule, *body])
 
 
-def main() -> dict:
-    print("Loading the three-way split (test is used once, below, for reporting)...")
+def compute_report() -> dict:
+    """Fit calibrators on validation and score everything on test.
+
+    Pure computation (no files written), so the Phase 7 notebook can call it
+    and walk through the results; `main()` adds saving, plotting and
+    printing on top.
+    """
     train_df, val_df, test_df = (
         df.to_pandas()
         for df in pl.collect_all(time_aware_train_val_test_split(clean(scan_raw_data())))
@@ -140,16 +145,13 @@ def main() -> dict:
     X_val, y_val = val_df.drop(columns=["Class"]), val_df["Class"].to_numpy()
     X_test, y_test = test_df.drop(columns=["Class"]), test_df["Class"].to_numpy()
     train_rate = float(train_df["Class"].mean())
-    print(
-        f"  frauds: train {int(train_df['Class'].sum())}, "
-        f"val {int(y_val.sum())}, test {int(y_test.sum())}"
-    )
 
     metric_rows: list[dict] = []
     threshold_rows: list[dict] = []
     platt_rows: list[dict] = []
     chosen_methods: dict[str, str] = {}
     cv_log_loss: dict[str, dict[str, float]] = {}
+    calibrators_by_model: dict[str, dict[str, Calibrator]] = {}
     raw_tables: dict[str, pd.DataFrame] = {}
     calibrated_tables: dict[str, pd.DataFrame] = {}
 
@@ -160,8 +162,7 @@ def main() -> dict:
         calibrators = {
             method: Calibrator.fit(method, model, X_val, y_val) for method in CALIBRATION_METHODS
         }
-        for method, calibrator in calibrators.items():
-            joblib.dump(calibrator, calibrator_artifact_path(model_name, method))
+        calibrators_by_model[model_name] = calibrators
         cv_log_loss[model_name] = {
             method: cross_validated_log_loss(method, model, X_val, y_val)
             for method in CALIBRATION_METHODS
@@ -201,47 +202,77 @@ def main() -> dict:
             y_test, variants[chosen][1], CALIBRATION_BIN_EDGES
         )
 
-    plot_reliability_diagram(
-        raw_tables,
-        REPORTS_DIR / "reliability_raw.png",
-        title="Reliability on test — raw scores",
-    )
-    plot_reliability_diagram(
-        calibrated_tables,
-        REPORTS_DIR / "reliability_calibrated.png",
-        title="Reliability on test — calibrated on validation",
-    )
-
-    report = {
+    return {
         "metrics_on_test": metric_rows,
         "thresholds": threshold_rows,
         "platt_parameters": platt_rows,
         "cv_log_loss_on_validation": cv_log_loss,
         "chosen_calibration_method": chosen_methods,
-        "reliability_tables_on_test": {
-            label: table.to_dict(orient="records")
-            for label, table in {**raw_tables, **calibrated_tables}.items()
-        },
+        "calibrators": calibrators_by_model,
+        "raw_tables": raw_tables,
+        "calibrated_tables": calibrated_tables,
+        "train_fraud_rate": train_rate,
         "n_fraud": {
             "train": int(train_df["Class"].sum()),
             "val": int(y_val.sum()),
             "test": int(y_test.sum()),
         },
+        "naive_test_cost": expected_cost(y_test, np.zeros(len(y_test), dtype=int)),
+    }
+
+
+def main() -> dict:
+    print("Fitting calibrators on validation; scoring on test (used once, here)...")
+    report = compute_report()
+    print(
+        "  frauds: "
+        + ", ".join(f"{name} {count}" for name, count in report["n_fraud"].items())
+    )
+
+    for model_name, calibrators in report["calibrators"].items():
+        for method, calibrator in calibrators.items():
+            joblib.dump(calibrator, calibrator_artifact_path(model_name, method))
+
+    plot_reliability_diagram(
+        report["raw_tables"],
+        REPORTS_DIR / "reliability_raw.png",
+        title="Reliability on test — raw scores",
+    )
+    plot_reliability_diagram(
+        report["calibrated_tables"],
+        REPORTS_DIR / "reliability_calibrated.png",
+        title="Reliability on test — calibrated on validation",
+    )
+
+    logged = {
+        key: report[key]
+        for key in (
+            "metrics_on_test",
+            "thresholds",
+            "platt_parameters",
+            "cv_log_loss_on_validation",
+            "chosen_calibration_method",
+            "n_fraud",
+        )
+    }
+    logged["reliability_tables_on_test"] = {
+        label: table.to_dict(orient="records")
+        for label, table in {**report["raw_tables"], **report["calibrated_tables"]}.items()
     }
     log_experiment(
         "calibration_report",
         params={
             "bin_edges": list(CALIBRATION_BIN_EDGES),
             "analytic_threshold": analytic_threshold(),
-            "train_fraud_rate": train_rate,
+            "train_fraud_rate": report["train_fraud_rate"],
         },
-        metrics=report,
+        metrics=logged,
     )
 
     print("\n## Probability metrics on test\n")
     print(
         _markdown_table(
-            metric_rows,
+            report["metrics_on_test"],
             [
                 ("model", "Model", ""),
                 ("calibration", "Calibration", ""),
@@ -256,11 +287,13 @@ def main() -> dict:
             ],
         )
     )
-    print("\n## Thresholds: expected cost on test (never-flag baseline: "
-          f"{expected_cost(y_test, np.zeros(len(y_test), dtype=int)):,.0f})\n")
+    print(
+        "\n## Thresholds: expected cost on test "
+        f"(never-flag baseline: {report['naive_test_cost']:,.0f})\n"
+    )
     print(
         _markdown_table(
-            threshold_rows,
+            report["thresholds"],
             [
                 ("model", "Model", ""),
                 ("calibration", "Calibration", ""),
@@ -277,7 +310,7 @@ def main() -> dict:
     print("\n## Platt parameters (fitted on validation) vs prior-shift prediction\n")
     print(
         _markdown_table(
-            platt_rows,
+            report["platt_parameters"],
             [
                 ("model", "Model", ""),
                 ("a", "a (fitted)", ".3f"),
@@ -287,10 +320,10 @@ def main() -> dict:
         )
     )
     print("\n## Calibration method chosen by 5-fold CV log loss on validation\n")
-    for model_name, losses in cv_log_loss.items():
+    for model_name, losses in report["cv_log_loss_on_validation"].items():
         print(
             f"- {model_name}: platt {losses['platt']:.5f}, isotonic {losses['isotonic']:.5f}"
-            f" -> {chosen_methods[model_name]}"
+            f" -> {report['chosen_calibration_method'][model_name]}"
         )
     return report
 
