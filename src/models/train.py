@@ -18,12 +18,13 @@ from src.config import (
     IEEE_MODEL_ARTIFACT_FILE,
     MODEL_ARTIFACT_CLASS_WEIGHTED_FILE,
     MODEL_ARTIFACT_SMOTE_FILE,
+    MODEL_ARTIFACT_UNWEIGHTED_FILE,
     MODELS_DIR,
     RANDOM_STATE,
     XGB_PARAMS,
 )
 from src.data.load import scan_raw_data, scan_raw_ieee_data
-from src.data.preprocess import clean, time_aware_split
+from src.data.preprocess import clean, time_aware_train_val_test_split
 from src.data.preprocess_ieee import (
     engineer_features,
     join_transaction_identity,
@@ -56,12 +57,27 @@ def train_baseline_logistic_regression(X_train: pd.DataFrame, y_train: pd.Series
     return model
 
 
+def class_weight_ratio(y_train: pd.Series) -> float:
+    """Negatives per positive, n_neg / n_pos: the `scale_pos_weight` used."""
+    n_pos = int(y_train.sum())
+    return (len(y_train) - n_pos) / n_pos
+
+
 def train_with_class_weighting(X_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
     """Fit an XGBoost model using scale_pos_weight for imbalance handling."""
-    n_pos = int(y_train.sum())
-    n_neg = len(y_train) - n_pos
-    scale_pos_weight = n_neg / n_pos
-    model = XGBClassifier(**XGB_PARAMS, scale_pos_weight=scale_pos_weight)
+    model = XGBClassifier(**XGB_PARAMS, scale_pos_weight=class_weight_ratio(y_train))
+    model.fit(X_train, y_train)
+    return model
+
+
+def train_unweighted(X_train: pd.DataFrame, y_train: pd.Series) -> XGBClassifier:
+    """Fit XGBoost with no imbalance handling at all: the calibration control.
+
+    Training minimises log loss on the real class balance, so the scores
+    should come out close to true probabilities; reweighting (class weights)
+    and resampling (SMOTE) both teach the model an inflated fraud rate.
+    """
+    model = XGBClassifier(**XGB_PARAMS)
     model.fit(X_train, y_train)
     return model
 
@@ -91,36 +107,44 @@ def log_experiment(name: str, params: dict, metrics: dict) -> Path:
 
 
 def _run_kaggle_training() -> dict:
+    """Fit every Kaggle model on the train slice and compare them on validation.
+
+    Test is deliberately not touched here: it is used once, for final
+    reporting, in src/models/calibration_report.py. Models are not refitted
+    on train + validation after selection, so the calibrators fitted on
+    validation stay matched to the exact models they correct.
+    """
     # Preprocessing runs in polars; the frames cross over to pandas here,
     # at the boundary with scikit-learn / imbalanced-learn.
-    train_df, test_df = (
-        df.to_pandas() for df in pl.collect_all(time_aware_split(clean(scan_raw_data())))
+    train_df, val_df, test_df = (
+        df.to_pandas()
+        for df in pl.collect_all(time_aware_train_val_test_split(clean(scan_raw_data())))
     )
     X_train, y_train = train_df.drop(columns=["Class"]), train_df["Class"]
-    X_test, y_test = test_df.drop(columns=["Class"]), test_df["Class"]
+    X_val, y_val = val_df.drop(columns=["Class"]), val_df["Class"]
 
-    baseline = train_baseline_logistic_regression(X_train, y_train)
-    baseline_pr_auc = pr_auc_score(y_test, baseline.predict_proba(X_test)[:, 1])
-
-    class_weighted_model = train_with_class_weighting(X_train, y_train)
-    class_weighted_pr_auc = pr_auc_score(
-        y_test, class_weighted_model.predict_proba(X_test)[:, 1]
-    )
-
-    smote_model = train_with_smote(X_train, y_train)
-    smote_pr_auc = pr_auc_score(y_test, smote_model.predict_proba(X_test)[:, 1])
+    models = {
+        "baseline_logistic_regression": train_baseline_logistic_regression(X_train, y_train),
+        "xgboost_unweighted": train_unweighted(X_train, y_train),
+        "xgboost_class_weighted": train_with_class_weighting(X_train, y_train),
+        "xgboost_smote": train_with_smote(X_train, y_train),
+    }
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(class_weighted_model, MODEL_ARTIFACT_CLASS_WEIGHTED_FILE)
-    joblib.dump(smote_model, MODEL_ARTIFACT_SMOTE_FILE)
+    joblib.dump(models["xgboost_unweighted"], MODEL_ARTIFACT_UNWEIGHTED_FILE)
+    joblib.dump(models["xgboost_class_weighted"], MODEL_ARTIFACT_CLASS_WEIGHTED_FILE)
+    joblib.dump(models["xgboost_smote"], MODEL_ARTIFACT_SMOTE_FILE)
 
-    metrics = {
-        "baseline_logistic_regression_pr_auc": baseline_pr_auc,
-        "xgboost_class_weighted_pr_auc": class_weighted_pr_auc,
-        "xgboost_smote_pr_auc": smote_pr_auc,
-        "n_train": len(train_df),
-        "n_test": len(test_df),
+    metrics: dict = {
+        f"{name}_val_pr_auc": pr_auc_score(y_val, model.predict_proba(X_val)[:, 1])
+        for name, model in models.items()
     }
+    # Fraud counts matter: threshold choice and calibration on validation
+    # rest on a few dozen frauds, which limits how precise they can be.
+    for slice_name, df in [("train", train_df), ("val", val_df), ("test", test_df)]:
+        metrics[f"n_{slice_name}"] = len(df)
+        metrics[f"n_fraud_{slice_name}"] = int(df["Class"].sum())
+    metrics["train_class_weight_ratio"] = class_weight_ratio(y_train)
     log_experiment("kaggle_creditcard", params=XGB_PARAMS, metrics=metrics)
     return metrics
 
@@ -157,7 +181,11 @@ def _run_ieee_training() -> dict:
 
 
 if __name__ == "__main__":
-    print("Training Kaggle Credit Card Fraud models (baseline LR, XGBoost class-weighted, XGBoost SMOTE)...")
+    print(
+        "Training Kaggle Credit Card Fraud models on the train slice "
+        "(baseline LR, XGBoost unweighted / class-weighted / SMOTE), "
+        "compared on validation..."
+    )
     kaggle_metrics = _run_kaggle_training()
     for key, value in kaggle_metrics.items():
         print(f"  {key}: {value}")

@@ -19,6 +19,10 @@ TEST_DATA_FILE = DATA_PROCESSED_DIR / "test.csv"
 # the Phase 3 shadow-mode A/B test has two real trained policies to compare.
 MODEL_ARTIFACT_CLASS_WEIGHTED_FILE = MODELS_DIR / "model_class_weighted.pkl"
 MODEL_ARTIFACT_SMOTE_FILE = MODELS_DIR / "model_smote.pkl"
+# Phase 7 calibration control: same XGB_PARAMS, no reweighting or
+# resampling. Log loss is a proper scoring rule, so this model is expected
+# to be roughly calibrated without any correction.
+MODEL_ARTIFACT_UNWEIGHTED_FILE = MODELS_DIR / "model_unweighted.pkl"
 # Class-weighting was kept as the primary served policy after Phase 3's
 # shadow-mode A/B test came back statistically inconclusive (95% CI on the
 # cost difference spanned zero) — chosen on point-estimate cost/PR-AUC and

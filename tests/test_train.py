@@ -8,10 +8,12 @@ from sklearn.pipeline import Pipeline
 from xgboost import XGBClassifier
 
 from src.models.train import (
+    class_weight_ratio,
     log_experiment,
     train_baseline_logistic_regression,
     train_with_class_weighting,
     train_with_smote,
+    train_unweighted,
 )
 
 
@@ -43,6 +45,22 @@ def test_train_with_smote_fits_and_separates_classes() -> None:
     assert isinstance(model, XGBClassifier)
     proba = model.predict_proba(X)[:, 1]
     assert proba[y == 1].mean() > proba[y == 0].mean()
+
+
+def test_train_unweighted_fits_and_separates_classes() -> None:
+    X, y = _make_synthetic_data()
+    model = train_unweighted(X, y)
+
+    assert isinstance(model, XGBClassifier)
+    assert model.get_params()["scale_pos_weight"] is None
+    proba = model.predict_proba(X)[:, 1]
+    assert proba[y == 1].mean() > proba[y == 0].mean()
+
+
+def test_class_weight_ratio_is_negatives_per_positive() -> None:
+    _, y = _make_synthetic_data()
+
+    assert class_weight_ratio(y) == 200 / 20
 
 
 def test_train_baseline_logistic_regression_returns_fitted_pipeline() -> None:
