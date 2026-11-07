@@ -37,6 +37,13 @@ IEEE_MODEL_ARTIFACT_FILE = MODELS_DIR / "model_ieee.pkl"
 # mirror a real production deployment where the model only ever sees past
 # transactions at training time.
 TEST_SIZE = 0.2
+# Validation slice (fraction of the full dataset) for model selection,
+# threshold search and calibrator fitting, so test is touched once, for
+# final reporting only. It is carved from the end of what used to be
+# training data, giving a 60 / 20 / 20 split in which the test slice (the
+# last 20%) is row-for-row identical to the old 80 / 20 split's test slice,
+# so old and new test numbers are directly comparable.
+VAL_SIZE = 0.2
 
 # --- Imbalance handling ---
 RANDOM_STATE = 42

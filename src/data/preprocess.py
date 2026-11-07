@@ -9,7 +9,7 @@ runs once rather than once per split.
 
 import polars as pl
 
-from src.config import TEST_SIZE
+from src.config import TEST_SIZE, VAL_SIZE
 
 
 def clean(lf: pl.LazyFrame) -> pl.LazyFrame:
@@ -32,3 +32,32 @@ def time_aware_split(
     train_lf = ordered.filter(pl.col("_row") < split_idx).drop("_row")
     test_lf = ordered.filter(pl.col("_row") >= split_idx).drop("_row")
     return train_lf, test_lf
+
+
+def time_aware_train_val_test_split(
+    lf: pl.LazyFrame, val_size: float = VAL_SIZE, test_size: float = TEST_SIZE
+) -> tuple[pl.LazyFrame, pl.LazyFrame, pl.LazyFrame]:
+    """Split by `Time` into train, then validation, then test.
+
+    Same approach as `time_aware_split` (stable sort, row index, boundaries
+    rounded down), and the test boundary uses the same expression, so the
+    test slice is row-for-row identical to `time_aware_split`'s. Validation
+    is used for model selection, threshold search and calibration; test is
+    held back for final reporting only.
+    """
+    if not (0 < val_size and 0 < test_size and val_size + test_size < 1):
+        raise ValueError(
+            "need 0 < val_size, 0 < test_size and val_size + test_size < 1, "
+            f"got val_size={val_size}, test_size={test_size}"
+        )
+    ordered = lf.sort("Time", maintain_order=True).with_row_index("_row")
+    # Round the fraction first: in floating point 1 - 0.4 - 0.2 is
+    # 0.39999999999999997, which would floor 5 * 0.4 down to 1 instead of 2.
+    train_fraction = round(1 - test_size - val_size, 12)
+    val_idx = (pl.len() * train_fraction).floor()
+    test_idx = (pl.len() * (1 - test_size)).floor()
+    row = pl.col("_row")
+    train_lf = ordered.filter(row < val_idx).drop("_row")
+    val_lf = ordered.filter((row >= val_idx) & (row < test_idx)).drop("_row")
+    test_lf = ordered.filter(row >= test_idx).drop("_row")
+    return train_lf, val_lf, test_lf
