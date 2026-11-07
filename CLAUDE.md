@@ -1,5 +1,7 @@
 # Fraud Detection System — Project Brief for Claude Code
 
+> **Current work: Phase 7 (validation split and probability calibration).** Phases 0–6 are complete and live (see README "Status"). The full spec for the current work is in [Phase 7](#phase-7--validation-split-and-probability-calibration-current-work) at the bottom of this file. Read that section first, then the rest of this file for project conventions.
+
 ## Purpose
 
 This is a portfolio project for **Liam Havers**, a Data Scientist (2+ years, MSc Data Science) currently strong in NLP/topic modelling/stats but light on **productionised, tabular ML**. Goal: build a credit-card fraud detection system that goes from raw data → trained model → served API → basic monitoring, to demonstrate end-to-end ML engineering skill for tech/finance Data Scientist job applications.
@@ -151,3 +153,218 @@ Work through these roughly in order. Each phase should end in something runnable
 - Real-time streaming ingestion (Kafka etc.) — mention as a "next steps" line in README instead, don't build it.
 - Full MLOps stack (MLflow, Airflow, Kubernetes) — too much for a portfolio project, and reviewers will value a clean, complete simple system over a half-finished complex one.
 - Frontend/UI — the API + Swagger docs is the interface; no need for a separate frontend.
+
+---
+
+## Phase 7 — Validation split and probability calibration (current work)
+
+### Why this phase exists
+
+Two weaknesses came out of reviewing the finished project. Both matter for Liam's current applications, especially credit-risk Data Scientist roles where a model's probabilities feed pricing and expected loss directly, and where "calibration as a first-order concern" is an explicit requirement.
+
+1. **The test set is used for selection.** `ab_test.py` picks the cost-minimising threshold on `y_test` and then reports cost on the same `y_test`. The comment in `ab_test.py` and the caveat in README Phase 3 already admit this. The SMOTE vs class-weighting choice was also made on test PR-AUC. The PR-AUC numbers are fair estimates, because nothing was tuned on test to produce them. The threshold, the expected cost and the model choice are optimistic.
+2. **The served probabilities aren't probabilities.** `scale_pos_weight` (about 578:1) and SMOTE both teach the model a much higher fraud base rate than the real 0.17%. Scores are inflated, which is why the class-weighted cost-optimal threshold is 0.29 and SMOTE's is 0.88. For a calibrated model, decision theory gives the threshold directly: t* = C_FP / (C_FP + C_FN) = 5 / 105 ≈ 0.048.
+
+The goal of this phase is to fix the first weakness, then measure and fix the second, and write both up honestly. That includes the results that don't come out as predicted.
+
+### How to work with Liam on this phase
+
+- **This is a learning exercise as much as a code change.** Liam will be asked about every choice here in interviews, without AI help, so he has to be able to defend each one unaided. Before each step, explain in a few sentences what you're about to do and why, then build it.
+- **Stop and ask at decision points** rather than deciding silently. The decision points are marked **[ASK LIAM]** below.
+- **Keep it simple.** Prefer small, typed functions that are easy to read. Where a method has a simple closed form (Platt scaling, calibration slope), implement it directly so the parameters are visible, rather than hiding it behind a wrapper.
+- **Test against synthetic data with a known truth.** Each new statistical function gets a test on synthetic data where the right answer is known in advance, the same style as `test_ab_test.py`.
+- **Commit after each step** with a clear message, and run the full test suite (`pytest`) before each commit.
+
+### Hard boundaries for this phase (do not touch)
+
+- `time_aware_split` in `preprocess.py` and `preprocess_ieee.py`: keep it unchanged. Drift monitoring uses it for its reference and current windows, and the pandas parity work in Phase 6 depends on it. Add a new function next to it instead.
+- `src/pandas_reference/` and `tests/pandas_reference/`: leave as they are.
+- The IEEE-CIS pipeline. Nothing is tuned on its test set (only PR-AUC is reported), so its evaluation isn't optimistic. See the optional stretch at the end.
+- The API, `predict.py`, the Dockerfile, the `model-v1` release artifact and the live Render demo. Changing the served model is a separate, optional step (Step 8) that needs Liam's go-ahead.
+- `XGB_PARAMS`. Keep the hyperparameters fixed, so the only thing that changes is the split and calibration. No early stopping and no tuning in this phase.
+
+### Step 1 — Three-way time-ordered split (Kaggle only)
+
+- **`config.py`**
+  - Add `VAL_SIZE = 0.2` as a fraction of the full dataset.
+  - Keep `TEST_SIZE = 0.2`, giving a 60 / 20 / 20 split.
+  - Comment why: the validation slice is taken from what was previously training data, so the test slice (the last 20%, 56,746 transactions, 74 frauds) is identical to before, and old and new test numbers are directly comparable.
+- **`src/data/preprocess.py`**: add `time_aware_train_val_test_split(lf, val_size=VAL_SIZE, test_size=TEST_SIZE) -> tuple[pl.LazyFrame, pl.LazyFrame, pl.LazyFrame]`.
+  - Use the same approach as `time_aware_split`: a stable sort on `Time`, a row index, and boundaries rounded down.
+  - Boundaries: `floor(n * (1 - test_size - val_size))` and `floor(n * (1 - test_size))`.
+  - Raise `ValueError` unless `0 < val_size`, `0 < test_size` and `val_size + test_size < 1`.
+- **Tests (`tests/test_preprocess.py`)**
+  - Rows are time-ordered across the three slices.
+  - No overlap between slices, and together they cover every row.
+  - Slice sizes are correct, including rounding down at the boundaries.
+  - The new test slice is row-for-row identical to `time_aware_split`'s test slice. This is the property that makes the before/after comparison valid.
+  - Tied timestamps keep their original order.
+  - Invalid sizes raise.
+- **Log the fraud count in each slice.** This matters: calibration and threshold choice on validation rest on roughly 70 to 100 frauds, which limits how precise they can be. Tell Liam the actual number.
+
+### Step 2 — Training on train only, comparing on validation
+
+In `train.py`, `_run_kaggle_training`:
+
+- Use the three-way split. Fit every model on the train slice only.
+- **Add an unweighted XGBoost** (same `XGB_PARAMS`, no `scale_pos_weight`, no SMOTE) as the calibration control. Add `MODEL_ARTIFACT_UNWEIGHTED_FILE = MODELS_DIR / "model_unweighted.pkl"` to config and save it. Log loss is a proper scoring rule, so this model should come out roughly calibrated without any correction. That's the hypothesis to check.
+- **Report PR-AUC on validation only** for the baseline logistic regression and the three XGBoost variants. Model comparison now happens on validation.
+- **Don't compute test metrics in `train.py` any more.** Test is touched once, in the Step 4 report.
+- Log n and fraud count per slice in the experiment JSON.
+- Note: retraining overwrites the local `model_class_weighted.pkl`. The live API is unaffected, because Docker and Render download the `model-v1` release asset. Don't change that.
+- **[ASK LIAM]** Explain the trade-off: production teams often refit on train plus validation after selection to use the most recent data, at the cost of the calibrator no longer matching the refitted model exactly. Recommend not refitting here (simpler, and the calibrator stays valid), and record the choice in the README.
+
+### Step 3 — Calibration and calibration metrics (`src/models/calibrate.py`)
+
+Use scikit-learn primitives. Don't bump the scikit-learn version for this phase.
+
+**Calibrators** (fit on validation only)
+
+- **Platt scaling, implemented directly.**
+  - Take the model's log-odds score: use `model.predict(X, output_margin=True)` for XGBoost. That's cleaner than taking the logit of a clipped probability.
+  - Fit an unpenalised logistic regression of `y_val` on that score: `LogisticRegression(penalty=None)`. The default L2 penalty would shrink the parameters.
+  - The result is `logit(p_cal) = a * score + b`. Return `a` and `b` explicitly so they can be reported and explained.
+  - For the baseline logistic regression pipeline, use its decision function, or skip calibrating it if that's awkward. Calibrating the three XGBoost variants is what matters.
+- **Isotonic regression**: `IsotonicRegression(out_of_bounds="clip", y_min=0, y_max=1)` fitted on the predicted probability.
+- **Wrap both in a small `Calibrator` dataclass** (method name, fitted parameters or object, and `predict_proba(model, X) -> np.ndarray`), and save each as a joblib artifact under `models/`.
+
+**Metrics**
+
+| Function | Notes |
+|---|---|
+| `brier_score(y, p)` | Use `sklearn.metrics.brier_score_loss`. |
+| `brier_skill_score(y, p)` | 1 − Brier / (π(1−π)), where π is the slice's observed rate, so the Brier score is read against "always predict the base rate". |
+| `log_loss_score(y, p)` | Clip p to [1e-15, 1 − 1e-15]. |
+| `calibration_in_the_large(y, p)` | Return mean predicted, observed rate, and their ratio (observed / expected, O/E). |
+| `calibration_slope_intercept(y, p)` | Unpenalised logistic regression of y on logit(p) (clipped). Slope below 1 means overconfident, above 1 underconfident; intercept away from 0 means a shifted curve. Return both. |
+| `reliability_table(y, p, bin_edges)` | Per bin: n, frauds, mean predicted, observed rate, and a **Wilson score interval** for the observed rate. Implement Wilson directly (a few lines) rather than adding statsmodels. |
+| `expected_calibration_error(table)` | n-weighted mean of the absolute gap per bin. Report it as secondary, because it depends on the binning. |
+
+**Binning decision**
+
+At a 0.17% base rate, equal-width or plain quantile bins put almost all the test frauds in one bin. Use **log-spaced bin edges on predicted probability** as the default. For example: `[0, 1e-4, 1e-3, 1e-2, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0]`, kept in config as `CALIBRATION_BIN_EDGES`. Show n and fraud count per bin, so bins resting on a handful of frauds are visible as such. **[ASK LIAM]** Show him the bin counts on validation before fixing the edges.
+
+**Plot**
+
+Add `plot_reliability_diagram(tables_by_label, save_path)` to `evaluate.py`, in the same style as the existing plots (`_SURFACE_COLOR`, `_GRID_COLOR`, colours by policy):
+- Log-scaled axes and a dashed diagonal.
+- Wilson error bars.
+- A small score histogram underneath.
+- Bins with zero frauds can't go on a log y-axis. Mark them at the bottom edge rather than dropping them silently.
+
+**Threshold helpers**
+
+- Add `analytic_threshold(fn_cost=COST_FALSE_NEGATIVE, fp_cost=COST_FALSE_POSITIVE) -> float`, returning `fp_cost / (fp_cost + fn_cost)`. Compute it from config, never hard-code it.
+- **Important fix:** `select_cost_minimising_threshold` searches `np.linspace(0.01, 0.99, 99)`. That grid is too coarse for calibrated probabilities, where the optimum sits near 0.048. Add an optional `thresholds` argument, with the current grid as the default so existing behaviour and tests are unchanged. For calibrated scores, pass a fine log-spaced grid such as `np.geomspace(1e-4, 0.99, 500)`.
+
+**Tests (`tests/test_calibrate.py`)**, all on synthetic data with a known truth:
+
+- **Inflated scores.** Generate a true probability `p_true` at a low base rate, draw `y ~ Bernoulli(p_true)`, and inflate the odds by a known `w` (logit + log w). Platt should recover `a ≈ 1` and `b ≈ −log(w)` within tolerance, and calibrated O/E should come out near 1.
+- **Perfectly calibrated input.** Slope ≈ 1, intercept ≈ 0, O/E ≈ 1.
+- **Overconfident input** (logits multiplied by 2). Slope ≈ 0.5.
+- **Isotonic output** is monotone non-decreasing in the input score and stays within [0, 1].
+- **Order preservation.** Platt leaves PR-AUC exactly unchanged, because it's a strictly monotone transform.
+- **Wilson interval** contains the true rate in about 95% of simulated draws (loose tolerance), and handles 0 and n successes without errors.
+- **Brier skill score** is 0 when every prediction equals the base rate.
+- **`analytic_threshold()`** returns 5/105 with the config costs.
+
+### Step 4 — Calibration report (`python -m src.models.calibration_report`)
+
+A new script. Test is touched here, once, for final reporting.
+
+1. Load the three-way split, the three XGBoost artifacts, and fit Platt and isotonic calibrators for each on validation.
+2. For each of the 9 combinations (unweighted, class-weighted, SMOTE × raw, Platt, isotonic), compute on **test**:
+   - PR-AUC
+   - Brier score and Brier skill score
+   - log loss
+   - O/E
+   - calibration slope and intercept
+   - ECE
+3. Compare thresholds, each evaluated by expected cost on test:
+   - **(a)** threshold searched on **validation** (use the fine grid for calibrated scores, the original grid for raw)
+   - **(b)** the **analytic** threshold of about 0.048 (only meaningful for calibrated scores, but report it for raw too, to show what goes wrong)
+   - **(c)** an **oracle** threshold searched on test, clearly labelled as reference only. It reproduces the old, optimistic approach, so the gap between (a) and (c) measures how optimistic the old numbers were.
+
+   For each, report cost reduction against the naive "never flag" baseline (7,400 on this test set).
+4. Save outputs:
+   - `reports/reliability_raw.png` (three raw models)
+   - `reports/reliability_calibrated.png` (each model's chosen calibrator)
+   - full tables via `log_experiment("calibration_report", ...)`
+   - a printed markdown table that can be pasted into the README
+5. Print the fitted Platt `a` and `b` for each model next to the prior-shift prediction:
+   - class-weighted: b ≈ −log(w), where w = n_neg / n_pos on the train slice
+   - SMOTE: b ≈ log(π / (1 − π)), because SMOTE balances the training data to 50/50
+
+   Real trees saturate near 0 and 1, so expect deviation, and explain it rather than hide it.
+
+### Step 5 — Re-run the shadow-mode A/B test without test-set leakage
+
+- In `ab_test.py`'s `__main__`, select each policy's threshold on validation, then compute cost, confusion matrices and the bootstrap comparison on test.
+- Delete the "deliberate simplification" comment, because it's no longer true.
+- Keep the comparison as raw class-weighted vs raw SMOTE, so it stays the same experiment with only the leakage removed.
+- **[ASK LIAM]** Whether to also compare the best calibrated policy at the analytic threshold against raw class-weighted at its validation threshold, using the existing `bootstrap_cost_difference`.
+
+### Step 6 — Notebook `notebooks/03_calibration.ipynb`
+
+A narrative walk-through for a human reader, in this order:
+
+1. Why calibration is separate from PR-AUC: ranking vs level.
+2. The raw reliability diagram.
+3. The metrics table.
+4. The Platt `a` and `b` vs the prior-shift prediction.
+5. The threshold story: 0.29 / 0.88 → about 0.048, and the validation vs oracle cost gap.
+6. Platt vs isotonic, given roughly 70 to 100 validation frauds.
+7. Limitations.
+
+Import the logic from `src/`. Don't re-implement it in cells.
+
+### Step 7 — README and CLAUDE.md updates
+
+- **New README section, "Phase 7 — Validation split & probability calibration"**, covering:
+  - what was wrong
+  - what changed
+  - the results table and the two reliability diagrams
+  - the threshold result
+  - an honest limitations paragraph: small fraud counts in validation and test; a dataset spanning about 48 hours, so "time-ordered" means hours, not months; and the calibrator fitted on a single validation window
+- **Update the README Phase 2 and Phase 3 tables to the new numbers.** Keep one line noting the old figures (PR-AUC 0.798, threshold 0.29, chosen on test) and why they changed. Remove the "simplification worth flagging" caveat in Phase 3, because it's now fixed.
+- Add calibration to "Key Design Principles" in one or two sentences, and update "How to Run It" with the new command.
+- **State the hypotheses below and whether each held.** If a prediction failed, say so plainly; that's worth more than a clean story.
+- Tick off this phase in "Status" and in this file.
+
+### Step 8 (optional, only with Liam's explicit go-ahead) — Serve the calibrated model
+
+- `FraudPredictor` would apply the chosen calibrator and use `DECISION_THRESHOLD = analytic_threshold()`. `fraud_probability` in the API response would then be a real probability, which is the point.
+- This needs:
+  - a new release (`model-v2`) with the model plus calibrator artifacts
+  - Dockerfile fallback URLs updated to `model-v2`
+  - `test_api.py` / `test_predict.py` updated
+  - re-verification of the live Render demo with `sample_transaction.json`
+- Don't start this step without asking.
+
+### Hypotheses to check (predictions, not facts)
+
+1. **PR-AUC.** Platt leaves PR-AUC exactly unchanged. Isotonic may shift it slightly, because its steps create tied scores.
+2. **Unweighted model.** It is roughly calibrated raw: slope near 1, O/E near 1.
+3. **Class-weighted and SMOTE, raw.** Predicted far exceeds observed (O/E well below 1), with much worse Brier score and log loss than unweighted. Calibration recovers most of the gap.
+4. **Thresholds.** After calibration, the analytic threshold of about 0.048 gives a test cost close to the validation-searched threshold. The old 0.29 and 0.88 operating points were artefacts of inflated scores.
+5. **Platt vs isotonic.** With only about 70 to 100 validation frauds, Platt beats isotonic on test log loss (isotonic overfits small samples).
+6. **Headline PR-AUC.** Test PR-AUC drops somewhat from 0.798, because training data shrinks from 80% to 60% and the most recent pre-test data moves into validation.
+7. **Optimism of the old approach.** The oracle (test-searched) threshold beats the validation-searched one by a visible margin. That margin is the optimism in the old Phase 3 numbers.
+
+### Known issue: note it, don't fix it in this phase
+
+`Time` is used as a model feature (`FEATURE_COLUMNS` in `predict.py`). Under a time-ordered split, test values of `Time` lie outside the training range, so a tree can only learn "when", not "what". The Databricks follow-on project excludes absolute time for exactly this reason. Removing it changes the API schema, so don't do it here. Add a README "Next Steps" line, and mention it to Liam.
+
+### Optional stretch — IEEE-CIS calibration
+
+IEEE-CIS has about 3.5% fraud, so a validation slice holds thousands of frauds and isotonic becomes viable. That makes a useful contrast with Kaggle on when to choose isotonic over Platt. It needs a three-way split there too, with `engineer_features` fitted on train and applied to validation and test. Only do this if Liam asks for it after Steps 1 to 7 are done.
+
+### Suggested commit sequence
+
+1. `Add time-ordered train/validation/test split with tests`
+2. `Train on train slice only; add unweighted XGBoost control; compare on validation`
+3. `Add calibration module (Platt, isotonic) and calibration metrics with tests`
+4. `Add calibration report script and reliability diagrams`
+5. `Select A/B test thresholds on validation instead of test`
+6. `Add calibration notebook`
+7. `Document Phase 7 results in README`
