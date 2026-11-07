@@ -86,6 +86,11 @@ CALIBRATION_CONFIDENCE_LEVEL = 0.95  # Wilson intervals on per-bin fraud rates
 FINE_THRESHOLD_GRID_MIN = 1e-4
 FINE_THRESHOLD_GRID_MAX = 0.99
 FINE_THRESHOLD_GRID_SIZE = 500
+# Calibration method used downstream (A/B test). Chosen by 5-fold
+# cross-validated log loss on validation in src/models/calibration_report.py,
+# which picked Platt over isotonic for all three XGBoost variants (57
+# validation frauds are too few for isotonic's step function).
+CALIBRATION_METHOD = "platt"
 
 # --- Drift monitoring ---
 DRIFT_PSI_THRESHOLD = 0.2
