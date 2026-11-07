@@ -71,6 +71,22 @@ COST_FALSE_POSITIVE = 5.0  # customer friction / investigation cost
 # in Phase 3 — see README "Phase 3" for the shadow-mode A/B test reasoning).
 DECISION_THRESHOLD = 0.29
 
+# --- Probability calibration (Phase 7) ---
+# Reliability-table bin edges on predicted probability. At a ~0.1-0.2% base
+# rate, equal-width or quantile bins put nearly every fraud in one bin, so
+# the low end is log-spaced (where the ~0.048 decision threshold sits). The
+# middle is merged into two wide bins (0.01-0.1, 0.1-0.5) because the
+# validation slice has only 57 frauds and finer middle bins held 5-12
+# transactions each.
+CALIBRATION_BIN_EDGES = (0.0, 1e-4, 1e-3, 1e-2, 0.1, 0.5, 1.0)
+CALIBRATION_CONFIDENCE_LEVEL = 0.95  # Wilson intervals on per-bin fraud rates
+# Threshold grid for calibrated scores: the cost-optimal threshold for a
+# calibrated model is ~0.048, so a fine log-spaced grid is needed rather
+# than the 0.01-0.99 linear grid used for raw (inflated) scores.
+FINE_THRESHOLD_GRID_MIN = 1e-4
+FINE_THRESHOLD_GRID_MAX = 0.99
+FINE_THRESHOLD_GRID_SIZE = 500
+
 # --- Drift monitoring ---
 DRIFT_PSI_THRESHOLD = 0.2
 

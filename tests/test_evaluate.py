@@ -73,3 +73,18 @@ def test_plot_functions_write_files(tmp_path) -> None:
 
     assert pr_path.exists()
     assert cm_path.exists()
+
+
+def test_select_cost_minimising_threshold_accepts_a_custom_grid() -> None:
+    # A fraud scored at 0.004 sits below the default grid's minimum (0.01);
+    # a finer grid can still find a threshold that catches it.
+    y_true = np.array([0, 0, 0, 1])
+    y_proba = np.array([0.0001, 0.0002, 0.0003, 0.004])
+    grid = np.geomspace(1e-4, 0.99, 500)
+
+    default_t = select_cost_minimising_threshold(y_true, y_proba)
+    fine_t = select_cost_minimising_threshold(y_true, y_proba, thresholds=grid)
+
+    assert default_t == 0.01  # unchanged behaviour: nothing flagged, first grid point
+    assert fine_t in grid
+    assert (y_proba >= fine_t).tolist() == [False, False, False, True]
