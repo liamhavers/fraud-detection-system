@@ -67,8 +67,12 @@ XGB_PARAMS = {
 # justified/tuned against the dataset and documented in the README.
 COST_FALSE_NEGATIVE = 100.0  # average fraud loss when a fraud is missed
 COST_FALSE_POSITIVE = 5.0  # customer friction / investigation cost
-# Cost-minimising threshold for the class-weighted policy (chosen as primary
-# in Phase 3 — see README "Phase 3" for the shadow-mode A/B test reasoning).
+# Threshold used by the served API. It belongs to the original class-weighted
+# model published as the `model-v1` release (searched on test in Phase 3),
+# not to the model `python -m src.models.train` now produces on the Phase 7
+# 60% train slice. Raw-score thresholds are specific to one training run;
+# for a calibrated model the threshold follows from the costs instead
+# (src.models.calibrate.analytic_threshold, ~0.048). See README "Phase 7".
 DECISION_THRESHOLD = 0.29
 
 # --- Probability calibration (Phase 7) ---

@@ -1,6 +1,6 @@
 # Fraud Detection System — Project Brief for Claude Code
 
-> **Current work: Phase 7 (validation split and probability calibration).** Phases 0–6 are complete and live (see README "Status"). The full spec for the current work is in [Phase 7](#phase-7--validation-split-and-probability-calibration-current-work) at the bottom of this file. Read that section first, then the rest of this file for project conventions.
+> **Phases 0–7 are complete** (see README "Status"). Phase 7 (validation split and probability calibration) finished on 2026-11-07; its spec is kept at the bottom of this file in [Phase 7](#phase-7--validation-split-and-probability-calibration-complete) for reference. Still open and only on Liam's explicit go-ahead: Step 8 (serve the calibrated model) and the optional IEEE-CIS calibration stretch.
 
 ## Purpose
 
@@ -156,7 +156,9 @@ Work through these roughly in order. Each phase should end in something runnable
 
 ---
 
-## Phase 7 — Validation split and probability calibration (current work)
+## Phase 7 — Validation split and probability calibration (complete)
+
+**Status: Steps 1–7 done (2026-11-07). Step 8 and the IEEE-CIS stretch not started.** Decisions made with Liam along the way: no refit on train + validation; merged middle reliability bins (`CALIBRATION_BIN_EDGES`); calibration method chosen by 5-fold CV log loss within validation (Platt for all three models, `CALIBRATION_METHOD`); the A/B test switched to a paired bootstrap (the original resampled the two policies independently); a second A/B comparison, best calibrated policy at the analytic threshold vs raw class-weighted. Results and which hypotheses held are in README "Phase 7".
 
 ### Why this phase exists
 
