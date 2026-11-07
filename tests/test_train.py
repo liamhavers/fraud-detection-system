@@ -11,9 +11,9 @@ from src.models.train import (
     class_weight_ratio,
     log_experiment,
     train_baseline_logistic_regression,
+    train_unweighted,
     train_with_class_weighting,
     train_with_smote,
-    train_unweighted,
 )
 
 
