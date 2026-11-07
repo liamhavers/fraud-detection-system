@@ -23,12 +23,16 @@ MODEL_ARTIFACT_SMOTE_FILE = MODELS_DIR / "model_smote.pkl"
 # resampling. Log loss is a proper scoring rule, so this model is expected
 # to be roughly calibrated without any correction.
 MODEL_ARTIFACT_UNWEIGHTED_FILE = MODELS_DIR / "model_unweighted.pkl"
-# Class-weighting was kept as the primary served policy after Phase 3's
-# shadow-mode A/B test came back statistically inconclusive (95% CI on the
-# cost difference spanned zero) — chosen on point-estimate cost/PR-AUC and
-# simplicity grounds, not because the test proved it superior. See README
-# "Phase 3" for the full reasoning.
-MODEL_ARTIFACT_FILE = MODEL_ARTIFACT_CLASS_WEIGHTED_FILE
+# Served by the API (published as the `model-v2` release): the unweighted
+# XGBoost plus its Platt calibrator, so `fraud_probability` is a calibrated
+# probability. Chosen on validation in Phase 7 (lowest validation cost at the
+# analytic threshold among the three Platt-calibrated variants); the A/B test
+# against raw class-weighting was inconclusive, so this is a choice on
+# point-estimate and on having meaningful probabilities, not a proven win.
+# Until Phase 7 the API served the raw class-weighted model (`model-v1`).
+# The calibrator file name matches calibrate.calibrator_artifact_path().
+MODEL_ARTIFACT_FILE = MODEL_ARTIFACT_UNWEIGHTED_FILE
+CALIBRATOR_ARTIFACT_FILE = MODELS_DIR / "calibrator_unweighted_platt.pkl"
 
 # IEEE-CIS dataset — feature-engineering showcase, not served via the API.
 IEEE_RAW_DIR = DATA_RAW_DIR / "ieee_cis"
@@ -67,13 +71,13 @@ XGB_PARAMS = {
 # justified/tuned against the dataset and documented in the README.
 COST_FALSE_NEGATIVE = 100.0  # average fraud loss when a fraud is missed
 COST_FALSE_POSITIVE = 5.0  # customer friction / investigation cost
-# Threshold used by the served API. It belongs to the original class-weighted
-# model published as the `model-v1` release (searched on test in Phase 3),
-# not to the model `python -m src.models.train` now produces on the Phase 7
-# 60% train slice. Raw-score thresholds are specific to one training run;
-# for a calibrated model the threshold follows from the costs instead
-# (src.models.calibrate.analytic_threshold, ~0.048). See README "Phase 7".
-DECISION_THRESHOLD = 0.29
+# Threshold used by the served API. The served score is a calibrated
+# probability p, so the cost-optimal rule follows from the costs alone: flag
+# when p * C_FN > (1 - p) * C_FP, i.e. p > C_FP / (C_FP + C_FN) = 5/105 ≈ 0.048.
+# Same formula as src.models.calibrate.analytic_threshold (a test pins the two
+# together; it's written out here because calibrate imports this module).
+# The raw-score model served until Phase 7 used 0.29, found by search on test.
+DECISION_THRESHOLD = COST_FALSE_POSITIVE / (COST_FALSE_POSITIVE + COST_FALSE_NEGATIVE)
 
 # --- Probability calibration (Phase 7) ---
 # Reliability-table bin edges on predicted probability. At a ~0.1-0.2% base

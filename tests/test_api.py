@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from xgboost import XGBClassifier
 
 from api.main import app, predictor
+from src.models.calibrate import Calibrator
 from src.models.predict import FEATURE_COLUMNS
 
 client = TestClient(app)
@@ -16,7 +17,7 @@ SAMPLE_TRANSACTION = {"time": 68.0, "amount": 2.69, **{f"v{i}": 0.0 for i in ran
 
 @pytest.fixture(autouse=True)
 def stub_predictor_model():
-    """Predict tests stub the model directly rather than relying on a real
+    """Predict tests stub the model and calibrator directly rather than relying on a real
     trained artifact — CI has no downloaded data/trained model to load, and
     `TestClient(app)` without a `with` block never triggers the app's
     lifespan (so `predictor.load()` is never called here), which is exactly
@@ -29,8 +30,10 @@ def stub_predictor_model():
     model.fit(X, y)
 
     predictor.model = model
+    predictor.calibrator = Calibrator(method="platt", platt_a=1.0, platt_b=0.0)
     yield
     predictor.model = None
+    predictor.calibrator = None
 
 
 def test_health_returns_ok() -> None:

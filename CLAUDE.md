@@ -1,6 +1,6 @@
 # Fraud Detection System — Project Brief for Claude Code
 
-> **Phases 0–7 are complete** (see README "Status"). Phase 7 (validation split and probability calibration) finished on 2026-11-07; its spec is kept at the bottom of this file in [Phase 7](#phase-7--validation-split-and-probability-calibration-complete) for reference. Still open and only on Liam's explicit go-ahead: Step 8 (serve the calibrated model) and the optional IEEE-CIS calibration stretch.
+> **Phases 0–7 are complete** (see README "Status"). Phase 7 (validation split and probability calibration) finished on 2026-11-07; its spec is kept at the bottom of this file in [Phase 7](#phase-7--validation-split-and-probability-calibration-complete) for reference. Step 8 (serve the calibrated model) is also done: the API serves unweighted XGBoost + Platt from the `model-v2` release at the cost-derived threshold. The optional IEEE-CIS calibration stretch was explicitly declined by Liam; don't start it.
 
 ## Purpose
 
@@ -158,7 +158,7 @@ Work through these roughly in order. Each phase should end in something runnable
 
 ## Phase 7 — Validation split and probability calibration (complete)
 
-**Status: Steps 1–7 done (2026-11-07). Step 8 and the IEEE-CIS stretch not started.** Decisions made with Liam along the way: no refit on train + validation; merged middle reliability bins (`CALIBRATION_BIN_EDGES`); calibration method chosen by 5-fold CV log loss within validation (Platt for all three models, `CALIBRATION_METHOD`); the A/B test switched to a paired bootstrap (the original resampled the two policies independently); a second A/B comparison, best calibrated policy at the analytic threshold vs raw class-weighted. Results and which hypotheses held are in README "Phase 7".
+**Status: Steps 1–8 done (2026-11-07). IEEE-CIS stretch declined by Liam.** Step 8 served unweighted + Platt (Liam's choice: the validation winner), with `train.py` now saving each model's calibrator alongside it and the Dockerfile downloading the model + calibrator pair from `model-v2` if either is missing. Decisions made with Liam along the way: no refit on train + validation; merged middle reliability bins (`CALIBRATION_BIN_EDGES`); calibration method chosen by 5-fold CV log loss within validation (Platt for all three models, `CALIBRATION_METHOD`); the A/B test switched to a paired bootstrap (the original resampled the two policies independently); a second A/B comparison, best calibrated policy at the analytic threshold vs raw class-weighted. Results and which hypotheses held are in README "Phase 7".
 
 ### Why this phase exists
 

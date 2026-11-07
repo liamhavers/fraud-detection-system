@@ -14,6 +14,7 @@ from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
 from src.config import (
+    CALIBRATION_METHOD,
     EXPERIMENTS_DIR,
     IEEE_MODEL_ARTIFACT_FILE,
     MODEL_ARTIFACT_CLASS_WEIGHTED_FILE,
@@ -32,6 +33,7 @@ from src.data.preprocess_ieee import (
 from src.data.preprocess_ieee import (
     time_aware_split as ieee_time_aware_split,
 )
+from src.models.calibrate import Calibrator, calibrator_artifact_path
 from src.models.evaluate import pr_auc_score
 
 
@@ -109,8 +111,9 @@ def log_experiment(name: str, params: dict, metrics: dict) -> Path:
 def _run_kaggle_training() -> dict:
     """Fit every Kaggle model on the train slice and compare them on validation.
 
-    Test is deliberately not touched here: it is used once, for final
-    reporting, in src/models/calibration_report.py. Models are not refitted
+    Each XGBoost model's calibrator is also fitted on validation and saved
+    alongside it. Test is deliberately not touched here: it is used once,
+    for final reporting, in src/models/calibration_report.py. Models are not refitted
     on train + validation after selection, so the calibrators fitted on
     validation stay matched to the exact models they correct.
     """
@@ -134,6 +137,14 @@ def _run_kaggle_training() -> dict:
     joblib.dump(models["xgboost_unweighted"], MODEL_ARTIFACT_UNWEIGHTED_FILE)
     joblib.dump(models["xgboost_class_weighted"], MODEL_ARTIFACT_CLASS_WEIGHTED_FILE)
     joblib.dump(models["xgboost_smote"], MODEL_ARTIFACT_SMOTE_FILE)
+
+    # Fit each XGBoost model's calibrator on validation and save it next to
+    # the model, so a retrain always produces a matched model + calibrator
+    # pair (the served API loads both; a stale calibrator would silently
+    # mis-correct a retrained model).
+    for name in ("unweighted", "class_weighted", "smote"):
+        calibrator = Calibrator.fit(CALIBRATION_METHOD, models[f"xgboost_{name}"], X_val, y_val)
+        joblib.dump(calibrator, calibrator_artifact_path(name, CALIBRATION_METHOD))
 
     metrics: dict = {
         f"{name}_val_pr_auc": pr_auc_score(y_val, model.predict_proba(X_val)[:, 1])
