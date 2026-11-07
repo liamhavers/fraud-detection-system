@@ -119,7 +119,8 @@ def plot_reliability_diagram(
         [t["mean_predicted"].to_numpy() for t in filled]
         + [t["observed_lower"].to_numpy() for t in filled]
     )
-    axis_min = max(1e-6, 10 ** np.floor(np.log10(positives[positives > 0].min())))
+    # Round down a decade below the smallest value, so no marker sits on the edge.
+    axis_min = max(1e-6, 10 ** np.floor(np.log10(positives[positives > 0].min() / 2)))
 
     fig, (ax, ax_hist) = plt.subplots(
         2,

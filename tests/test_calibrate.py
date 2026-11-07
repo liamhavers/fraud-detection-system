@@ -19,6 +19,7 @@ from src.models.calibrate import (
     brier_skill_score,
     calibration_in_the_large,
     calibration_slope_intercept,
+    cross_validated_log_loss,
     expected_calibration_error,
     fit_isotonic,
     fit_platt,
@@ -120,6 +121,24 @@ def test_calibrator_fixes_a_class_weighted_model(method: str) -> None:
 
     assert calibration_in_the_large(y_val, model.predict_proba(X_val)[:, 1])["o_to_e"] < 0.2
     assert calibration_in_the_large(y_val, p_cal)["o_to_e"] == pytest.approx(1.0, abs=0.05)
+
+
+def test_cross_validated_log_loss_rewards_calibration_out_of_sample() -> None:
+    # Out-of-fold calibrated log loss should beat the raw inflated scores and
+    # land close to the log loss of the true probabilities.
+    rng = np.random.default_rng(3)
+    n = 40_000
+    X = pd.DataFrame({"f": rng.normal(size=n)})
+    true_p = _sigmoid(-5 + 1.5 * X["f"].to_numpy())
+    y = rng.binomial(1, true_p)
+    model = LogisticRegression(class_weight="balanced").fit(X, y)
+
+    raw = log_loss_score(y, model.predict_proba(X)[:, 1])
+    truth = log_loss_score(y, true_p)
+    for method in ("platt", "isotonic"):
+        cv = cross_validated_log_loss(method, model, X, y)
+        assert cv < raw / 3
+        assert cv == pytest.approx(truth, rel=0.05)
 
 
 def test_calibrator_rejects_unknown_method() -> None:

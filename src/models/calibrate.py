@@ -21,6 +21,7 @@ from scipy.stats import norm
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss
+from sklearn.model_selection import StratifiedKFold
 from xgboost import XGBClassifier
 
 from src.config import (
@@ -28,6 +29,7 @@ from src.config import (
     COST_FALSE_NEGATIVE,
     COST_FALSE_POSITIVE,
     MODELS_DIR,
+    RANDOM_STATE,
 )
 
 _EPS = 1e-15
@@ -130,6 +132,30 @@ class Calibrator:
         if self.method == "platt":
             return apply_platt(model_log_odds(model, X), self.platt_a, self.platt_b)
         return self.isotonic.predict(model.predict_proba(X)[:, 1])
+
+
+def cross_validated_log_loss(
+    method: Literal["platt", "isotonic"],
+    model: XGBClassifier | object,
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_splits: int = 5,
+) -> float:
+    """Out-of-fold log loss of a calibration method, within one data slice.
+
+    Used to choose between Platt and isotonic on validation without touching
+    test. Scoring a calibrator on the same rows it was fitted on would always
+    favour the more flexible isotonic fit; here each fold's calibrator is
+    scored only on rows it did not see. Folds are stratified so each holds a
+    share of the (few) frauds.
+    """
+    y = np.asarray(y)
+    folds = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=RANDOM_STATE)
+    out_of_fold = np.empty(len(y), dtype=float)
+    for fit_idx, score_idx in folds.split(X, y):
+        calibrator = Calibrator.fit(method, model, X.iloc[fit_idx], y[fit_idx])
+        out_of_fold[score_idx] = calibrator.predict_proba(model, X.iloc[score_idx])
+    return log_loss_score(y, out_of_fold)
 
 
 def calibrator_artifact_path(model_name: str, method: str) -> Path:
